@@ -1,3 +1,226 @@
+<?php
+// Start the vendor session
+session_name('vendor_session');
+session_start();
+
+// Redirect to login if not authenticated
+if (!isset($_SESSION['vendor_id'])) {
+  header("Location: vendor-login.php");
+  exit();
+}
+
+// Set timezone to PKT
+date_default_timezone_set('Asia/Karachi');
+
+// Database connection
+$servername = "localhost";
+$username = "root";
+$password = "";
+$dbname = "foodiehub";
+
+try {
+  $conn = new PDO("mysql:host=$servername;dbname=$dbname", $username, $password);
+  $conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+} catch (PDOException $e) {
+  die("Connection failed: " . $e->getMessage());
+}
+
+// Initialize messages
+$error_message = '';
+$success_message = '';
+
+// Fetch today's schedule
+try {
+  $vendor_id = $_SESSION['vendor_id'];
+  $today = date('Y-m-d'); // e.g., 2025-06-02
+  $stmt = $conn->prepare("SELECT start_time, end_time FROM vendor_schedules WHERE vendor_id = :vendor_id AND schedule_date = :today");
+  $stmt->bindParam(':vendor_id', $vendor_id);
+  $stmt->bindParam(':today', $today);
+  $stmt->execute();
+  $today_schedule = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+  $error_message = "Error fetching today's schedule: " . $e->getMessage();
+  $today_schedule = [];
+}
+
+// Upload directory
+$upload_dir = 'Uploads/';
+if (!is_dir($upload_dir)) {
+  mkdir($upload_dir, 0755, true);
+}
+
+// Handle add menu item
+if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['add_menu_item'])) {
+  $name = trim(htmlspecialchars($_POST['itemName'], ENT_QUOTES, 'UTF-8'));
+  $category = $_POST['itemCategory'];
+  $description = trim(htmlspecialchars($_POST['itemDescription'], ENT_QUOTES, 'UTF-8'));
+  $price = floatval($_POST['itemPrice']);
+  $vendor_id = $_SESSION['vendor_id'];
+  $image_path = '';
+
+  // Validate inputs
+  if (empty($name) || empty($category) || empty($price)) {
+    $error_message = "Item name, category, and price are required.";
+  } elseif ($price <= 0) {
+    $error_message = "Price must be greater than zero.";
+  } elseif (!in_array($category, ['Pizzas', 'Sides', 'Drinks', 'Desserts'])) {
+    $error_message = "Invalid category selected.";
+  } else {
+    // Handle image upload
+    if (isset($_FILES['itemImage']) && $_FILES['itemImage']['error'] == UPLOAD_ERR_OK) {
+      $file = $_FILES['itemImage'];
+      $allowed_types = ['image/jpeg', 'image/png', 'image/jpg'];
+      $max_size = 2 * 1024 * 1024; // 2MB
+
+      if (!in_array($file['type'], $allowed_types)) {
+        $error_message = "Only JPG, JPEG, and PNG images are allowed.";
+      } elseif ($file['size'] > $max_size) {
+        $error_message = "Image size must not exceed 2MB.";
+      } else {
+        $ext = pathinfo($file['name'], PATHINFO_EXTENSION);
+        $filename = uniqid('menu_', true) . '.' . $ext;
+        $destination = $upload_dir . $filename;
+
+        if (move_uploaded_file($file['tmp_name'], $destination)) {
+          $image_path = $destination;
+        } else {
+          $error_message = "Failed to upload image.";
+        }
+      }
+    }
+
+    // Insert into database if no errors
+    if (empty($error_message)) {
+      try {
+        $stmt = $conn->prepare("INSERT INTO menu_items (vendor_id, name, category, description, price, image) VALUES (:vendor_id, :name, :category, :description, :price, :image)");
+        $stmt->bindParam(':vendor_id', $vendor_id);
+        $stmt->bindParam(':name', $name);
+        $stmt->bindParam(':category', $category);
+        $stmt->bindParam(':description', $description);
+        $stmt->bindParam(':price', $price);
+        $stmt->bindParam(':image', $image_path);
+        $stmt->execute();
+        $success_message = "Menu item added successfully!";
+      } catch (PDOException $e) {
+        $error_message = "Error adding item: " . $e->getMessage();
+      }
+    }
+  }
+}
+
+// Handle edit menu item
+if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['edit_menu_item'])) {
+  $item_id = intval($_POST['itemId']);
+  $name = trim(htmlspecialchars($_POST['itemName'], ENT_QUOTES, 'UTF-8'));
+  $category = $_POST['itemCategory'];
+  $description = trim(htmlspecialchars($_POST['itemDescription'], ENT_QUOTES, 'UTF-8'));
+  $price = floatval($_POST['itemPrice']);
+  $vendor_id = $_SESSION['vendor_id'];
+  $image_path = $_POST['existingImage'] ?? '';
+
+  // Validate inputs
+  if (empty($name) || empty($category) || empty($price)) {
+    $error_message = "Item name, category, and price are required.";
+  } elseif ($price <= 0) {
+    $error_message = "Price must be greater than zero.";
+  } elseif (!in_array($category, ['Pizzas', 'Sides', 'Drinks', 'Desserts'])) {
+    $error_message = "Invalid category selected.";
+  } else {
+    // Handle image upload
+    if (isset($_FILES['itemImage']) && $_FILES['itemImage']['error'] == UPLOAD_ERR_OK) {
+      $file = $_FILES['itemImage'];
+      $allowed_types = ['image/jpeg', 'image/png', 'image/jpg'];
+      $max_size = 2 * 1024 * 1024; // 2MB
+
+      if (!in_array($file['type'], $allowed_types)) {
+        $error_message = "Only JPG, JPEG, and PNG images are allowed.";
+      } elseif ($file['size'] > $max_size) {
+        $error_message = "Image size must not exceed 2MB.";
+      } else {
+        $ext = pathinfo($file['name'], PATHINFO_EXTENSION);
+        $filename = uniqid('menu_', true) . '.' . $ext;
+        $destination = $upload_dir . $filename;
+
+        if (move_uploaded_file($file['tmp_name'], $destination)) {
+          $image_path = $destination;
+          // Delete old image if it exists
+          if (!empty($_POST['existingImage']) && file_exists($_POST['existingImage'])) {
+            unlink($_POST['existingImage']);
+          }
+        } else {
+          $error_message = "Failed to upload image.";
+        }
+      }
+    }
+
+    // Update database if no errors
+    if (empty($error_message)) {
+      try {
+        $stmt = $conn->prepare("UPDATE menu_items SET name = :name, category = :category, description = :description, price = :price, image = :image WHERE id = :item_id AND vendor_id = :vendor_id");
+        $stmt->bindParam(':name', $name);
+        $stmt->bindParam(':category', $category);
+        $stmt->bindParam(':description', $description);
+        $stmt->bindParam(':price', $price);
+        $stmt->bindParam(':image', $image_path);
+        $stmt->bindParam(':item_id', $item_id);
+        $stmt->bindParam(':vendor_id', $vendor_id);
+        $stmt->execute();
+        if ($stmt->rowCount() > 0) {
+          $success_message = "Menu item updated successfully!";
+        } else {
+          $error_message = "No item found or you don't have permission to edit this item.";
+        }
+      } catch (PDOException $e) {
+        $error_message = "Error updating item: " . $e->getMessage();
+      }
+    }
+  }
+}
+
+// Handle delete menu item
+if (isset($_GET['delete_id']) && is_numeric($_GET['delete_id'])) {
+  $item_id = intval($_GET['delete_id']);
+  $vendor_id = $_SESSION['vendor_id'];
+  try {
+    // Fetch image path to delete file
+    $stmt = $conn->prepare("SELECT image FROM menu_items WHERE id = :item_id AND vendor_id = :vendor_id");
+    $stmt->bindParam(':item_id', $item_id);
+    $stmt->bindParam(':vendor_id', $vendor_id);
+    $stmt->execute();
+    $item = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    // Delete from database
+    $stmt = $conn->prepare("DELETE FROM menu_items WHERE id = :item_id AND vendor_id = :vendor_id");
+    $stmt->bindParam(':item_id', $item_id);
+    $stmt->bindParam(':vendor_id', $vendor_id);
+    $stmt->execute();
+
+    if ($stmt->rowCount() > 0) {
+      // Delete image file if it exists
+      if (!empty($item['image']) && file_exists($item['image'])) {
+        unlink($item['image']);
+      }
+      $success_message = "Menu item deleted successfully!";
+    } else {
+      $error_message = "No item found or you don't have permission to delete this item.";
+    }
+  } catch (PDOException $e) {
+    $error_message = "Error deleting item: " . $e->getMessage();
+  }
+}
+
+// Fetch menu items for the vendor
+try {
+  $stmt = $conn->prepare("SELECT id, name, category, description, price, image FROM menu_items WHERE vendor_id = :vendor_id ORDER BY created_at DESC");
+  $stmt->bindParam(':vendor_id', $_SESSION['vendor_id']);
+  $stmt->execute();
+  $menu_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+  $error_message = "Error fetching menu items: " . $e->getMessage();
+  $menu_items = [];
+}
+?>
+
 <!DOCTYPE html>
 <html lang="en">
 
@@ -155,6 +378,16 @@
       margin-bottom: 1.5rem;
     }
 
+    .schedule-info {
+      background: var(--gray-100);
+      border-radius: var(--border-radius);
+      padding: 1rem;
+      margin-bottom: 2rem;
+      font-size: 1rem;
+      color: var(--dark-color);
+      border-left: 4px solid var(--primary-color);
+    }
+
     .menu-item {
       display: flex;
       align-items: center;
@@ -246,6 +479,23 @@
       border-top: none;
     }
 
+    /* Messages */
+    .error-message {
+      color: var(--danger-color);
+      font-size: 0.9rem;
+      margin-bottom: 1rem;
+      text-align: center;
+      display: <?php echo !empty($error_message) ? 'block' : 'none'; ?>;
+    }
+
+    .success-message {
+      color: var(--success-color);
+      font-size: 0.9rem;
+      margin-bottom: 1rem;
+      text-align: center;
+      display: <?php echo !empty($success_message) ? 'block' : 'none'; ?>;
+    }
+
     /* Responsive */
     @media (max-width: 992px) {
       .sidebar {
@@ -291,6 +541,10 @@
       .menu-item img {
         margin-bottom: 1rem;
       }
+
+      .schedule-info {
+        font-size: 0.9rem;
+      }
     }
 
     /* Fade In Animation */
@@ -308,7 +562,7 @@
 </head>
 
 <body>
-<?php include 'includes/sidebar.php'; ?>
+  <?php include 'includes/sidebar.php'; ?>
 
   <!-- Main Content -->
   <div class="main-content">
@@ -320,9 +574,45 @@
             <h2 class="menu-title">Menu Items</h2>
             <button class="btn" data-bs-toggle="modal" data-bs-target="#addMenuItemModal">Add New Item</button>
           </div>
-          <div id="menuItems"></div>
+          <!-- Today's Schedule -->
+          <div class="schedule-info fade-in">
+            <h5>Today's Schedule (<?php echo date('F j, Y'); ?>)</h5>
+            <?php if (empty($today_schedule)): ?>
+              <p>No availability set for today. <a href="vendor-schedule.php">Set schedule</a>.</p>
+            <?php else: ?>
+              <?php foreach ($today_schedule as $schedule): ?>
+                <p>
+                  Open: <?php echo date('h:i A', strtotime($schedule['start_time'])); ?> -
+                  <?php echo date('h:i A', strtotime($schedule['end_time'])); ?>
+                </p>
+              <?php endforeach; ?>
+            <?php endif; ?>
+          </div>
+          <div class="error-message"><?php echo htmlspecialchars($error_message); ?></div>
+          <div class="success-message"><?php echo htmlspecialchars($success_message); ?></div>
+          <div id="menuItems">
+            <?php if (empty($menu_items)): ?>
+              <p class="text-center">No menu items added yet.</p>
+            <?php else: ?>
+              <?php foreach ($menu_items as $item): ?>
+                <div class="menu-item fade-in">
+                  <img src="<?php echo htmlspecialchars($item['image'] ?: 'data:image/svg+xml,<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 300 180\"><rect fill=\"%23ff6b35\" width=\"300\" height=\"180\"/><circle fill=\"%23ffa726\" cx=\"150\" cy=\"90\" r=\"50\"/><text x=\"150\" y=\"100\" text-anchor=\"middle\" fill=\"white\" font-size=\"28\">🍽️</text></svg>'); ?>" alt="<?php echo htmlspecialchars($item['name']); ?>">
+                  <div class="menu-item-info">
+                    <div class="menu-item-title"><?php echo htmlspecialchars($item['name']); ?></div>
+                    <div class="menu-item-price">PKR <?php echo number_format($item['price'], 2); ?></div>
+                    <div><?php echo htmlspecialchars($item['category']); ?></div>
+                    <div><?php echo htmlspecialchars($item['description'] ?: 'No description available.'); ?></div>
+                  </div>
+                  <div>
+                    <button class="btn btn-primary me-2" data-bs-toggle="modal" data-bs-target="#editMenuItemModal" onclick="populateEditForm(<?php echo $item['id']; ?>, '<?php echo addslashes(htmlspecialchars($item['name'])); ?>', '<?php echo htmlspecialchars($item['category']); ?>', '<?php echo addslashes(htmlspecialchars($item['description'])); ?>', <?php echo $item['price']; ?>, '<?php echo addslashes(htmlspecialchars($item['image'])); ?>')">Edit</button>
+                    <a href="vendor-menu.php?delete_id=<?php echo $item['id']; ?>" class="btn btn-danger" onclick="return confirm('Are you sure you want to delete this item?')">Delete</a>
+                  </div>
+                </div>
+              <?php endforeach; ?>
+            <?php endif; ?>
+          </div>
           <div class="text-center mt-4">
-            <button class="btn" onclick="proceedToSchedule()">Proceed to Schedule</button>
+            <a href="vendor-schedule.php" class="btn" onclick="return validateMenuItems()">Proceed to Schedule</a>
           </div>
         </div>
       </div>
@@ -337,37 +627,91 @@
           <h5 class="modal-title" id="addMenuItemModalLabel">Add Menu Item</h5>
           <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
         </div>
-        <div class="modal-body">
-          <div class="form-group mb-3">
-            <label for="itemName">Item Name</label>
-            <input type="text" class="form-control" id="itemName" placeholder="Enter item name">
+        <form method="POST" action="" enctype="multipart/form-data">
+          <div class="modal-body">
+            <div class="form-group mb-3">
+              <label for="itemName">Item Name</label>
+              <input type="text" class="form-control" id="itemName" name="itemName" placeholder="Enter item name" required>
+            </div>
+            <div class="form-group mb-3">
+              <label for="itemCategory">Category</label>
+              <select class="form-control" id="itemCategory" name="itemCategory" required>
+                <option value="Pizzas">Pizzas</option>
+                <option value="Sides">Sides</option>
+                <option value="Drinks">Drinks</option>
+                <option value="Desserts">Desserts</option>
+              </select>
+            </div>
+            <div class="form-group mb-3">
+              <label for="itemDescription">Description</label>
+              <textarea class="form-control" id="itemDescription" name="itemDescription" placeholder="Enter description"></textarea>
+            </div>
+            <div class="form-group mb-3">
+              <label for="itemPrice">Price (PKR)</label>
+              <input type="number" class="form-control" id="itemPrice" name="itemPrice" step="0.01" placeholder="Enter price" required>
+            </div>
+            <div class="form-group mb-3">
+              <label for="itemImage">Image</label>
+              <input type="file" class="form-control" id="itemImage" name="itemImage" accept="image/jpeg,image/png,image/jpg">
+            </div>
           </div>
-          <div class="form-group mb-3">
-            <label for="itemCategory">Category</label>
-            <select class="form-control" id="itemCategory">
-              <option value="Pizzas">Pizzas</option>
-              <option value="Sides">Sides</option>
-              <option value="Drinks">Drinks</option>
-              <option value="Desserts">Desserts</option>
-            </select>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            <button type="submit" class="btn btn-primary" name="add_menu_item">Add Item</button>
           </div>
-          <div class="form-group mb-3">
-            <label for="itemDescription">Description</label>
-            <textarea class="form-control" id="itemDescription" placeholder="Enter description"></textarea>
-          </div>
-          <div class="form-group mb-3">
-            <label for="itemPrice">Price ($)</label>
-            <input type="number" class="form-control" id="itemPrice" step="0.01" placeholder="Enter price">
-          </div>
-          <div class="form-group mb-3">
-            <label for="itemImage">Image URL</label>
-            <input type="text" class="form-control" id="itemImage" placeholder="Enter image URL">
-          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Edit Menu Item Modal -->
+  <div class="modal fade" id="editMenuItemModal" tabindex="-1" aria-labelledby="editMenuItemModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="editMenuItemModalLabel">Edit Menu Item</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
         </div>
-        <div class="modal-footer">
-          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-          <button type="button" class="btn btn-primary" onclick="addMenuItem()">Add Item</button>
-        </div>
+        <form method="POST" action="" enctype="multipart/form-data">
+          <div class="modal-body">
+            <input type="hidden" id="editItemId" name="itemId">
+            <input type="hidden" id="existingImage" name="existingImage">
+            <div class="form-group mb-3">
+              <label for="editItemName">Item Name</label>
+              <input type="text" class="form-control" id="editItemName" name="itemName" placeholder="Enter item name" required>
+            </div>
+            <div class="form-group mb-3">
+              <label for="editItemCategory">Category</label>
+              <select class="form-control" id="editItemCategory" name="itemCategory" required>
+                <option value="Pizzas">Pizzas</option>
+                <option value="Sides">Sides</option>
+                <option value="Drinks">Drinks</option>
+                <option value="Desserts">Desserts</option>
+              </select>
+            </div>
+            <div class="form-group mb-3">
+              <label for="editItemDescription">Description</label>
+              <textarea class="form-control" id="editItemDescription" name="itemDescription" placeholder="Enter description"></textarea>
+            </div>
+            <div class="form-group mb-3">
+              <label for="editItemPrice">Price (PKR)</label>
+              <input type="number" class="form-control" id="editItemPrice" name="itemPrice" step="0.01" placeholder="Enter price" required>
+            </div>
+            <div class="form-group mb-3">
+              <label for="editItemImage">Image</label>
+              <input type="file" class="form-control" id="editItemImage" name="itemImage" accept="image/jpeg,image/png,image/jpg">
+              <small class="form-text text-muted">Leave blank to keep existing image.</small>
+            </div>
+            <div class="form-group mb-3">
+              <label>Current Image</label><br>
+              <img id="currentImage" src="" alt="Current Image" style="max-width: 100px; max-height: 100px; border-radius: 8px;">
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            <button type="submit" class="btn btn-primary" name="edit_menu_item">Save Changes</button>
+          </div>
+        </form>
       </div>
     </div>
   </div>
@@ -377,30 +721,11 @@
 
   <!-- Custom JavaScript -->
   <script>
-    // Initialize menu items
-    let menuItems = JSON.parse(localStorage.getItem('menuItems')) || [];
-
-    // DOM Elements
-    const sidebar = document.getElementById('sidebar');
-    const sidebarToggle = document.getElementById('sidebarToggle');
-
     // Initialize page
     document.addEventListener('DOMContentLoaded', function() {
-      // Render menu items
-      renderMenuItems();
-
-      // Highlight active sidebar link
-      const currentPage = window.location.pathname.split('/').pop() || 'vendor-menu.php';
-      document.querySelectorAll('.sidebar .nav-link').forEach(link => {
-        const href = link.getAttribute('href');
-        if (href === currentPage) {
-          link.classList.add('active');
-        } else {
-          link.classList.remove('active');
-        }
-      });
-
       // Toggle sidebar on mobile
+      const sidebar = document.getElementById('sidebar');
+      const sidebarToggle = document.getElementById('sidebarToggle');
       sidebarToggle.addEventListener('click', function() {
         sidebar.classList.toggle('active');
       });
@@ -420,7 +745,6 @@
       }, {
         threshold: 0.1
       });
-
       document.querySelectorAll('.fade-in').forEach(el => observer.observe(el));
 
       // Navbar scroll effect
@@ -436,66 +760,27 @@
       });
     });
 
-    // Render menu items
-    function renderMenuItems() {
-      const menuItemsContainer = document.getElementById('menuItems');
-      menuItemsContainer.innerHTML = menuItems.length ? menuItems.map(item => `
-        <div class="menu-item fade-in">
-          <img src="${item.image || 'data:image/svg+xml,<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 300 180\"><rect fill=\"%23ff6b35\" width=\"300\" height=\"180\"/><circle fill=\"%23ffa726\" cx=\"150\" cy=\"90\" r=\"50\"/><text x=\"150\" y=\"100\" text-anchor=\"middle\" fill=\"white\" font-size=\"28\">🍽️</text></svg>'}" alt="${item.name}">
-          <div class="menu-item-info">
-            <div class="menu-item-title">${item.name}</div>
-            <div class="menu-item-price">$${item.price.toFixed(2)}</div>
-            <div>${item.category}</div>
-            <div>${item.description}</div>
-          </div>
-          <div>
-            <button class="btn btn-danger" onclick="deleteMenuItem(${item.id})">Delete</button>
-          </div>
-        </div>
-      `).join('') : '<p class="text-center">No menu items added yet.</p>';
+    // Populate edit form
+    function populateEditForm(id, name, category, description, price, image) {
+      document.getElementById('editItemId').value = id;
+      document.getElementById('editItemName').value = name;
+      document.getElementById('editItemCategory').value = category;
+      document.getElementById('editItemDescription').value = description || '';
+      document.getElementById('editItemPrice').value = price;
+      document.getElementById('existingImage').value = image || '';
+      const currentImage = document.getElementById('currentImage');
+      currentImage.src = image || 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 180"><rect fill="%23ff6b35" width="300" height="180"/><circle fill="%23ffa726" cx="150" cy="90" r="50"/><text x="150" y="100" text-anchor="middle" fill="white" font-size="28">🍽️</text></svg>';
     }
 
-    // Add menu item
-    window.addMenuItem = function() {
-      const newItem = {
-        id: menuItems.length + 1,
-        name: document.getElementById('itemName').value,
-        category: document.getElementById('itemCategory').value,
-        description: document.getElementById('itemDescription').value,
-        price: parseFloat(document.getElementById('itemPrice').value),
-        image: document.getElementById('itemImage').value
-      };
-
-      if (newItem.name && newItem.price) {
-        menuItems.push(newItem);
-        localStorage.setItem('menuItems', JSON.stringify(menuItems));
-        renderMenuItems();
-        bootstrap.Modal.getInstance(document.getElementById('addMenuItemModal')).hide();
-        alert('Menu item added successfully!');
-      } else {
-        alert('Please fill in all required fields.');
-      }
-    };
-
-    // Delete menu item
-    window.deleteMenuItem = function(id) {
-      if (confirm('Are you sure you want to delete this item?')) {
-        menuItems = menuItems.filter(item => item.id !== id);
-        localStorage.setItem('menuItems', JSON.stringify(menuItems));
-        renderMenuItems();
-        alert('Menu item deleted!');
-      }
-    };
-
-    // Proceed to schedule
-    window.proceedToSchedule = function() {
+    // Validate menu items before proceeding
+    function validateMenuItems() {
+      const menuItems = <?php echo json_encode($menu_items); ?>;
       if (menuItems.length === 0) {
         alert('Please add at least one menu item before proceeding.');
-        return;
+        return false;
       }
-      alert('Menu saved successfully! Please set your restaurant schedule.');
-      window.location.href = 'vendor-schedule.php';
-    };
+      return true;
+    }
   </script>
 </body>
 

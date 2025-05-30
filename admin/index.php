@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>TasteConnect - Admin Dashboard</title>
+  <title>FoodHub - Admin Dashboard</title>
   <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/css/bootstrap.min.css" rel="stylesheet">
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
   <style>
@@ -607,7 +607,7 @@
       <div class="brand-logo">
         <i class="fas fa-utensils"></i>
       </div>
-      <div class="brand-name">TasteConnect</div>
+      <div class="brand-name">FoodHub</div>
     </div>
     <nav class="sidebar-menu">
       <a href="#" class="menu-item active" data-page="dashboard">
@@ -664,9 +664,9 @@
           <span class="notification-badge">5</span>
         </button>
         <div class="user-dropdown">
-          <div class="user-avatar">MA</div>
+          <div class="user-avatar">JD</div>
           <div>
-            <div style="font-weight: 600; color: var(--dark-color);">M Ahmad</div>
+            <div style="font-weight: 600; color: var(--dark-color);">John Doe</div>
             <div style="font-size: 0.8rem; color: var(--medium-gray);">Admin</div>
           </div>
           <i class="fas fa-chevron-down" style="color: var(--medium-gray);"></i>

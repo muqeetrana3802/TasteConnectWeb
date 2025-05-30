@@ -1,3 +1,90 @@
+<?php
+session_start();
+
+// Database connection configuration
+$servername = "localhost";
+$username = "root";
+$password = "";
+$dbname = "foodiehub";
+
+// Initialize error and success messages
+$error = '';
+$success = '';
+
+try {
+  // Create database connection
+  $conn = new PDO("mysql:host=$servername;dbname=$dbname", $username, $password);
+  $conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+
+  // Handle form submission
+  if ($_SERVER["REQUEST_METHOD"] == "POST") {
+    $first_name = trim($_POST['first_name']);
+    $last_name = trim($_POST['last_name']);
+    $email = trim($_POST['email']);
+    $phone = trim($_POST['phone']);
+    $password = trim($_POST['password']);
+    $confirm_password = trim($_POST['confirm_password']);
+    $address = trim($_POST['address'] ?? '');
+    $city = trim($_POST['city'] ?? '');
+    $postal_code = trim($_POST['postal_code'] ?? '');
+    $terms_accepted = isset($_POST['terms_accepted']);
+
+    // Server-side validation
+    if (empty($first_name) || empty($last_name) || empty($email) || empty($phone) || empty($password)) {
+      $error = "All required fields must be filled.";
+    } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+      $error = "Invalid email format.";
+    } elseif ($password !== $confirm_password) {
+      $error = "Passwords do not match.";
+    } elseif (strlen($password) < 8) {
+      $error = "Password must be at least 8 characters long.";
+    } elseif (!$terms_accepted) {
+      $error = "You must accept the terms and conditions.";
+    } else {
+      // Check if email already exists
+      $stmt = $conn->prepare("SELECT id FROM users WHERE email = :email");
+      $stmt->bindParam(':email', $email);
+      $stmt->execute();
+
+      if ($stmt->rowCount() > 0) {
+        $error = "Email is already registered.";
+      } else {
+        // Hash password
+        $hashed_password = password_hash($password, PASSWORD_DEFAULT);
+
+        // Prepare and execute insert query
+        $stmt = $conn->prepare("
+                    INSERT INTO users (first_name, last_name, email, phone, password, address, city, postal_code, created_at)
+                    VALUES (:first_name, :last_name, :email, :phone, :password, :address, :city, :postal_code, NOW())
+                ");
+        $stmt->bindParam(':first_name', $first_name);
+        $stmt->bindParam(':last_name', $last_name);
+        $stmt->bindParam(':email', $email);
+        $stmt->bindParam(':phone', $phone);
+        $stmt->bindParam(':password', $hashed_password);
+        $stmt->bindParam(':address', $address);
+        $stmt->bindParam(':city', $city);
+        $stmt->bindParam(':postal_code', $postal_code);
+
+        if ($stmt->execute()) {
+          // Set session variables
+          $_SESSION['user_id'] = $conn->lastInsertId();
+          $_SESSION['first_name'] = $first_name;
+          $_SESSION['email'] = $email;
+
+          $success = "Registration successful! Redirecting to dashboard...";
+          header("refresh:2;url=index.php"); // Redirect after 2 seconds
+        } else {
+          $error = "Registration failed. Please try again.";
+        }
+      }
+    }
+  }
+} catch (PDOException $e) {
+  $error = "Connection failed: " . $e->getMessage();
+}
+?>
+
 <!DOCTYPE html>
 <html lang="en">
 
@@ -334,6 +421,10 @@
       margin-top: 0.25rem;
     }
 
+    .alert {
+      margin-bottom: 1.5rem;
+    }
+
     @media (max-width: 768px) {
       body {
         padding: 1rem 0;
@@ -400,7 +491,14 @@
             <h2 class="registration-title">Create Account</h2>
             <p class="registration-subtitle">Start your food journey with us today</p>
 
-            <form id="registrationForm" novalidate>
+            <?php if ($error): ?>
+              <div class="alert alert-danger"><?php echo htmlspecialchars($error); ?></div>
+            <?php endif; ?>
+            <?php if ($success): ?>
+              <div class="alert alert-success"><?php echo htmlspecialchars($success); ?></div>
+            <?php endif; ?>
+
+            <form id="registrationForm" method="POST" novalidate>
               <div class="row">
                 <div class="col-md-6">
                   <div class="form-group">
@@ -409,7 +507,7 @@
                       <span class="input-group-text">
                         <i class="fas fa-user"></i>
                       </span>
-                      <input type="text" class="form-control" id="firstName" name="first_name" placeholder="Enter first name" required>
+                      <input type="text" class="form-control" id="firstName" name="first_name" placeholder="Enter first name" value="<?php echo isset($_POST['first_name']) ? htmlspecialchars($_POST['first_name']) : ''; ?>" required>
                     </div>
                     <div class="invalid-feedback"></div>
                   </div>
@@ -421,7 +519,7 @@
                       <span class="input-group-text">
                         <i class="fas fa-user"></i>
                       </span>
-                      <input type="text" class="form-control" id="lastName" name="last_name" placeholder="Enter last name" required>
+                      <input type="text" class="form-control" id="lastName" name="last_name" placeholder="Enter last name" value="<?php echo isset($_POST['last_name']) ? htmlspecialchars($_POST['last_name']) : ''; ?>" required>
                     </div>
                     <div class="invalid-feedback"></div>
                   </div>
@@ -434,7 +532,7 @@
                   <span class="input-group-text">
                     <i class="fas fa-envelope"></i>
                   </span>
-                  <input type="email" class="form-control" id="email" name="email" placeholder="Enter your email" required>
+                  <input type="email" class="form-control" id="email" name="email" placeholder="Enter your email" value="<?php echo isset($_POST['email']) ? htmlspecialchars($_POST['email']) : ''; ?>" required>
                 </div>
                 <div class="invalid-feedback"></div>
               </div>
@@ -445,7 +543,7 @@
                   <span class="input-group-text">
                     <i class="fas fa-phone"></i>
                   </span>
-                  <input type="tel" class="form-control" id="phone" name="phone" placeholder="Enter phone number" required>
+                  <input type="tel" class="form-control" id="phone" name="phone" placeholder="Enter phone number" value="<?php echo isset($_POST['phone']) ? htmlspecialchars($_POST['phone']) : ''; ?>" required>
                 </div>
                 <div class="invalid-feedback"></div>
               </div>
@@ -490,7 +588,7 @@
                   <span class="input-group-text">
                     <i class="fas fa-map-marker-alt"></i>
                   </span>
-                  <input type="text" class="form-control" id="address" name="address" placeholder="Enter your address">
+                  <input type="text" class="form-control" id="address" name="address" placeholder="Enter your address" value="<?php echo isset($_POST['address']) ? htmlspecialchars($_POST['address']) : ''; ?>">
                 </div>
               </div>
 
@@ -498,20 +596,20 @@
                 <div class="col-md-8">
                   <div class="form-group">
                     <label class="form-label">City</label>
-                    <input type="text" class="form-control" id="city" name="city" placeholder="Enter city">
+                    <input type="text" class="form-control" id="city" name="city" placeholder="Enter city" value="<?php echo isset($_POST['city']) ? htmlspecialchars($_POST['city']) : ''; ?>">
                   </div>
                 </div>
                 <div class="col-md-4">
                   <div class="form-group">
                     <label class="form-label">Postal Code</label>
-                    <input type="text" class="form-control" id="postalCode" name="postal_code" placeholder="Enter postal code">
+                    <input type="text" class="form-control" id="postalCode" name="postal_code" placeholder="Enter postal code" value="<?php echo isset($_POST['postal_code']) ? htmlspecialchars($_POST['postal_code']) : ''; ?>">
                   </div>
                 </div>
               </div>
 
               <div class="terms-checkbox">
                 <div class="form-check">
-                  <input class="form-check-input" type="checkbox" id="termsAccepted" name="terms_accepted" required>
+                  <input class="form-check-input" type="checkbox" id="termsAccepted" name="terms_accepted" <?php echo isset($_POST['terms_accepted']) ? 'checked' : ''; ?> required>
                   <label class="form-check-label" for="termsAccepted">
                     I agree to the <a href="#" class="text-decoration-none">Terms of Service</a> and <a href="#" class="text-decoration-none">Privacy Policy</a> <span class="text-danger">*</span>
                   </label>
@@ -643,12 +741,10 @@
 
     // Form submission
     document.getElementById('registrationForm').addEventListener('submit', function(e) {
-      e.preventDefault();
-
-      // Basic validation
-      const requiredFields = ['firstName', 'lastName', 'email', 'phone', 'password', 'confirmPassword'];
+      // Allow PHP to handle form submission
       let isValid = true;
 
+      const requiredFields = ['firstName', 'lastName', 'email', 'phone', 'password', 'confirmPassword'];
       requiredFields.forEach(fieldId => {
         const field = document.getElementById(fieldId);
         const feedback = field.closest('.form-group').querySelector('.invalid-feedback');
@@ -663,7 +759,6 @@
         }
       });
 
-      // Check terms acceptance
       const termsCheckbox = document.getElementById('termsAccepted');
       const termsFeedback = termsCheckbox.parentElement.querySelector('.invalid-feedback');
 
@@ -674,21 +769,8 @@
         termsFeedback.textContent = '';
       }
 
-      // Check password match
-      const password = document.getElementById('password').value;
-      const confirmPassword = document.getElementById('confirmPassword').value;
-
-      if (password !== confirmPassword) {
-        isValid = false;
-      }
-
-      if (isValid) {
-        // Here you would typically send the data to your backend
-        alert('Registration form submitted successfully!');
-        console.log('Registration data:', new FormData(this));
-
-        // You can redirect to success page or send AJAX request
-        // window.location.href = 'login.php';
+      if (!isValid) {
+        e.preventDefault();
       }
     });
 

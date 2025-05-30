@@ -1,3 +1,8 @@
+<?php 
+session_start();
+include 'config/db.php'
+
+?>
 <!DOCTYPE html>
 <html lang="en">
 
@@ -705,47 +710,6 @@
               </div>
             </div>
           </div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- Contact Section -->
-  <section id="contact" class="section contact">
-    <div class="container">
-      <div class="section-title fade-in">
-        <h2>Get In Touch</h2>
-        <p>Have questions? We'd love to hear from you</p>
-      </div>
-      <div class="row justify-content-center">
-        <div class="col-lg-8">
-          <form class="fade-in" id="contactForm">
-            <div class="row mb-3">
-              <div class="col-md-6">
-                <div class="form-floating">
-                  <input type="text" class="form-control" id="name" placeholder="Your Name" required>
-                  <label for="name">Your Name</label>
-                </div>
-              </div>
-              <div class="col-md-6">
-                <div class="form-floating">
-                  <input type="email" class="form-control" id="email" placeholder="Your Email" required>
-                  <label for="email">Your Email</label>
-                </div>
-              </div>
-            </div>
-            <div class="mb-3">
-              <div class="form-floating">
-                <textarea class="form-control" placeholder="Your Message" id="message" style="height: 120px" required></textarea>
-                <label for="message">Your Message</label>
-              </div>
-            </div>
-            <div class="text-center">
-              <button type="submit" class="btn btn-submit">
-                <i class="fas fa-paper-plane me-2"></i>Send Message
-              </button>
-            </div>
-          </form>
         </div>
       </div>
     </div>

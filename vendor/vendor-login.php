@@ -1,3 +1,59 @@
+<?php
+// Start the vendor session
+session_name('vendor_session');
+session_start();
+
+// Database connection
+$servername = "localhost";
+$username = "root";
+$password = "";
+$dbname = "foodiehub";
+
+try {
+  $conn = new PDO("mysql:host=$servername;dbname=$dbname", $username, $password);
+  $conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+} catch (PDOException $e) {
+  die("Connection failed: " . $e->getMessage());
+}
+
+// Handle login
+$error_message = '';
+if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['login'])) {
+  $email = filter_var($_POST['email'], FILTER_SANITIZE_EMAIL);
+  $password = $_POST['password'];
+
+  if (empty($email) || empty($password)) {
+    $error_message = "Email and password are required.";
+  } else {
+    try {
+      $stmt = $conn->prepare("SELECT id, email, password FROM vendors WHERE email = :email");
+      $stmt->bindParam(':email', $email);
+      $stmt->execute();
+      $vendor = $stmt->fetch(PDO::FETCH_ASSOC);
+
+      if ($vendor && password_verify($password, $vendor['password'])) {
+        $_SESSION['vendor_id'] = $vendor['id'];
+        $_SESSION['vendor_email'] = $vendor['email'];
+        header("Location: index.php");
+        exit();
+      } else {
+        $error_message = "Invalid email or password.";
+      }
+    } catch (PDOException $e) {
+      $error_message = "Error: " . $e->getMessage();
+    }
+  }
+}
+
+// Handle logout
+if (isset($_GET['logout'])) {
+  session_unset();
+  session_destroy();
+  header("Location: vendor_login.php");
+  exit();
+}
+?>
+
 <!DOCTYPE html>
 <html lang="en">
 
@@ -43,7 +99,6 @@
       margin: 0;
     }
 
-    /* Navbar Styles */
     .navbar {
       background: var(--white) !important;
       box-shadow: var(--shadow);
@@ -57,7 +112,6 @@
       color: var(--primary-color) !important;
     }
 
-    /* Login Card */
     .login-card {
       background: var(--white);
       border-radius: var(--border-radius);
@@ -114,11 +168,10 @@
       color: var(--danger-color);
       font-size: 0.9rem;
       margin-top: 0.5rem;
-      display: none;
       text-align: center;
+      <?php echo !empty($error_message) ? 'display: block;' : 'display: none;'; ?>
     }
 
-    /* Links */
     .register-link,
     .home-link {
       color: var(--primary-color);
@@ -133,7 +186,6 @@
       text-decoration: underline;
     }
 
-    /* Fade in animation */
     .fade-in {
       opacity: 0;
       transform: translateY(30px);
@@ -145,7 +197,6 @@
       transform: translateY(0);
     }
 
-    /* Responsive */
     @media (max-width: 576px) {
       .login-card {
         margin: 1rem;
@@ -159,16 +210,18 @@
   <!-- Login Form -->
   <div class="login-card fade-in">
     <h2><i class="fas fa-utensils me-2"></i>Vendor Login</h2>
-    <div id="errorMessage" class="error-message">Invalid email or password</div>
-    <div class="mb-3">
-      <label for="email" class="form-label">Email</label>
-      <input type="email" class="form-control" id="email" placeholder="Enter your email" required>
-    </div>
-    <div class="mb-3">
-      <label for="password" class="form-label">Password</label>
-      <input type="password" class="form-control" id="password" placeholder="Enter your password" required>
-    </div>
-    <button class="btn btn-login" onclick="handleLogin()">Login</button>
+    <div id="errorMessage" class="error-message"><?php echo htmlspecialchars($error_message); ?></div>
+    <form method="POST" action="">
+      <div class="mb-3">
+        <label for="email" class="form-label">Email</label>
+        <input type="email" class="form-control" id="email" name="email" placeholder="Enter your email" required>
+      </div>
+      <div class="mb-3">
+        <label for="password" class="form-label">Password</label>
+        <input type="password" class="form-control" id="password" name="password" placeholder="Enter your password" required>
+      </div>
+      <button type="submit" name="login" class="btn btn-login">Login</button>
+    </form>
     <div class="text-center mt-3">
       <p>Don't have an account? <a href="add-vendor.php" class="register-link">Register here</a></p>
       <p><a href="index.php" class="home-link">Back to Home</a></p>
@@ -180,30 +233,6 @@
 
   <!-- Custom JavaScript -->
   <script>
-    // Sample credentials (in real app, this would be handled by a backend)
-    const validCredentials = {
-      email: "vendor@foodiehub.com",
-      password: "password123"
-    };
-
-    // Handle login
-    window.handleLogin = function() {
-      const email = document.getElementById('email').value.trim();
-      const password = document.getElementById('password').value.trim();
-      const errorMessage = document.getElementById('errorMessage');
-
-      if (email === validCredentials.email && password === validCredentials.password) {
-        // In real app, set session or token here
-        localStorage.setItem('vendorLoggedIn', 'true');
-        window.location.href = 'vendor.php';
-      } else {
-        errorMessage.style.display = 'block';
-        setTimeout(() => {
-          errorMessage.style.display = 'none';
-        }, 3000);
-      }
-    };
-
     // Initialize page
     document.addEventListener('DOMContentLoaded', function() {
       // Fade-in animation
@@ -213,7 +242,7 @@
       // Allow login on Enter key
       document.getElementById('password').addEventListener('keypress', function(e) {
         if (e.key === 'Enter') {
-          handleLogin();
+          document.querySelector('form').submit();
         }
       });
     });

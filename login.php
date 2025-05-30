@@ -1,3 +1,64 @@
+<?php
+session_start();
+// Database connection configuration
+$servername = "localhost";
+$username = "root";
+$password = "";
+$dbname = "foodiehub";
+
+// Initialize error and success messages
+$error = '';
+$success = '';
+
+try {
+  // Create database connection
+  $conn = new PDO("mysql:host=$servername;dbname=$dbname", $username, $password);
+  $conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+
+  // Handle form submission
+  if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['email']) && isset($_POST['password'])) {
+    $email = trim($_POST['email']);
+    $password = trim($_POST['password']);
+    $remember_me = isset($_POST['remember_me']);
+
+    // Server-side validation
+    if (empty($email) || empty($password)) {
+      $error = "Email and password are required.";
+    } else {
+      // Check if email exists
+      $stmt = $conn->prepare("SELECT id, first_name, email, password FROM users WHERE email = :email");
+      $stmt->bindParam(':email', $email);
+      $stmt->execute();
+      $user = $stmt->fetch(PDO::FETCH_ASSOC);
+
+      if ($user && password_verify($password, $user['password'])) {
+        // Set session variables
+        $_SESSION['user_id'] = $user['id'];
+        $_SESSION['first_name'] = $user['first_name'];
+        $_SESSION['email'] = $user['email'];
+
+        // Handle "Remember Me" functionality with cookies (optional)
+        if ($remember_me) {
+          $token = bin2hex(random_bytes(16));
+          setcookie('remember_me', $token, time() + (30 * 24 * 60 * 60), "/", "", true, true); // 30 days, secure, HttpOnly
+          $stmt = $conn->prepare("UPDATE users SET remember_token = :token WHERE id = :id");
+          $stmt->bindParam(':token', $token);
+          $stmt->bindParam(':id', $user['id']);
+          $stmt->execute();
+        }
+
+        $success = "Login successful! Redirecting to dashboard...";
+        header("refresh:2;url=index.php"); // Redirect after 2 seconds
+      } else {
+        $error = "Invalid email or password.";
+      }
+    }
+  }
+} catch (PDOException $e) {
+  $error = "Connection failed: " . $e->getMessage();
+}
+?>
+
 <!DOCTYPE html>
 <html lang="en">
 
@@ -404,7 +465,7 @@
 </head>
 
 <body>
-<a href="index.php" class="btn btn-outline-secondary position-absolute top-0 start-0 m-3 z-3">
+  <a href="index.php" class="btn btn-outline-secondary position-absolute top-0 start-0 m-3 z-3">
     <i class="fas fa-arrow-left me-1"></i> Back
   </a>
   <div class="container-fluid">
@@ -443,16 +504,21 @@
             <p class="login-subtitle">Welcome back! Please sign in to your account</p>
 
             <!-- Alert Messages -->
-            <div id="alertContainer"></div>
+            <?php if ($error): ?>
+              <div class="alert alert-danger"><?php echo htmlspecialchars($error); ?></div>
+            <?php endif; ?>
+            <?php if ($success): ?>
+              <div class="alert alert-success"><?php echo htmlspecialchars($success); ?></div>
+            <?php endif; ?>
 
-            <form id="loginForm" novalidate>
+            <form id="loginForm" method="POST" novalidate>
               <div class="form-group">
                 <label class="form-label">Email Address</label>
                 <div class="input-group">
                   <span class="input-group-text">
                     <i class="fas fa-envelope"></i>
                   </span>
-                  <input type="email" class="form-control" id="email" name="email" placeholder="Enter your email" required>
+                  <input type="email" class="form-control" id="email" name="email" placeholder="Enter your email" value="<?php echo isset($_POST['email']) ? htmlspecialchars($_POST['email']) : ''; ?>" required>
                 </div>
                 <div class="invalid-feedback"></div>
               </div>
@@ -473,7 +539,7 @@
 
               <div class="form-options">
                 <div class="form-check">
-                  <input class="form-check-input" type="checkbox" id="rememberMe" name="remember_me">
+                  <input class="form-check-input" type="checkbox" id="rememberMe" name="remember_me" <?php echo isset($_POST['remember_me']) ? 'checked' : ''; ?>>
                   <label class="form-check-label" for="rememberMe">
                     Remember me
                   </label>
@@ -502,8 +568,7 @@
             </div>
 
             <div class="signup-link">
-              Don't have an account? <a href="#" onclick="window.location.href = 'register.php';">Create account</a>
-
+              Don't have an account? <a href="register.php">Create account</a>
             </div>
           </div>
         </div>
@@ -542,7 +607,97 @@
   </div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/js/bootstrap.bundle.min.js"></script>
+  <script>
+    function togglePassword(inputId, iconId) {
+      const passwordInput = document.getElementById(inputId);
+      const toggleIcon = document.getElementById(iconId);
 
+      if (passwordInput.type === 'password') {
+        passwordInput.type = 'text';
+        toggleIcon.classList.remove('fa-eye');
+        toggleIcon.classList.add('fa-eye-slash');
+      } else {
+        passwordInput.type = 'password';
+        toggleIcon.classList.remove('fa-eye-slash');
+        toggleIcon.classList.add('fa-eye');
+      }
+    }
+
+    function showForgotPassword() {
+      const modal = new bootstrap.Modal(document.getElementById('forgotPasswordModal'));
+      modal.show();
+    }
+
+    function socialLogin(provider) {
+      // Placeholder for social login
+      alert(`Sign in with ${provider} is not implemented yet.`);
+    }
+
+    // Client-side form validation
+    document.getElementById('loginForm').addEventListener('submit', function(e) {
+      let isValid = true;
+      const email = document.getElementById('email');
+      const password = document.getElementById('password');
+      const emailFeedback = email.nextElementSibling;
+      const passwordFeedback = password.nextElementSibling;
+
+      if (!email.value.trim()) {
+        email.classList.add('is-invalid');
+        emailFeedback.textContent = 'Email is required';
+        isValid = false;
+      } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.value)) {
+        email.classList.add('is-invalid');
+        emailFeedback.textContent = 'Please enter a valid email address';
+        isValid = false;
+      } else {
+        email.classList.remove('is-invalid');
+        emailFeedback.textContent = '';
+      }
+
+      if (!password.value.trim()) {
+        password.classList.add('is-invalid');
+        passwordFeedback.textContent = 'Password is required';
+        isValid = false;
+      } else {
+        password.classList.remove('is-invalid');
+        passwordFeedback.textContent = '';
+      }
+
+      if (!isValid) {
+        e.preventDefault();
+      } else {
+        const loginBtn = document.getElementById('loginBtn');
+        const loginText = document.getElementById('loginText');
+        const loginIcon = document.getElementById('loginIcon');
+        const spinner = document.getElementById('loadingSpinner');
+
+        loginBtn.disabled = true;
+        loginText.textContent = 'Signing In...';
+        loginIcon.style.display = 'none';
+        spinner.style.display = 'inline-block';
+      }
+    });
+
+    // Forgot password form validation
+    document.getElementById('forgotPasswordForm').addEventListener('submit', function(e) {
+      e.preventDefault();
+      const resetEmail = document.getElementById('resetEmail');
+      const feedback = resetEmail.nextElementSibling;
+
+      if (!resetEmail.value.trim()) {
+        resetEmail.classList.add('is-invalid');
+        feedback.textContent = 'Email is required';
+      } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(resetEmail.value)) {
+        resetEmail.classList.add('is-invalid');
+        feedback.textContent = 'Please enter a valid email address';
+      } else {
+        resetEmail.classList.remove('is-invalid');
+        feedback.textContent = '';
+        alert('Password reset link sent! (This is a placeholder.)');
+        bootstrap.Modal.getInstance(document.getElementById('forgotPasswordModal')).hide();
+      }
+    });
+  </script>
 </body>
 
 </html>

@@ -1,3 +1,132 @@
+<?php
+// Start the vendor session
+session_name('vendor_session');
+session_start();
+
+// Redirect to login if not authenticated
+if (!isset($_SESSION['vendor_id'])) {
+  header("Location: vendor-login.php");
+  exit();
+}
+
+// Set timezone to PKT
+date_default_timezone_set('Asia/Karachi');
+
+// Database connection
+$servername = "localhost";
+$username = "root";
+$password = "";
+$dbname = "foodiehub";
+
+try {
+  $conn = new PDO("mysql:host=$servername;dbname=$dbname", $username, $password);
+  $conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+} catch (PDOException $e) {
+  die("Connection failed: " . $e->getMessage());
+}
+
+// Initialize messages and vendor array
+$error_message = '';
+$success_message = '';
+$vendor = ['restaurant_name' => 'N/A', 'email' => 'N/A', 'contact_number' => 'N/A', 'category' => '', 'address' => 'N/A'];
+
+// Fetch vendor details
+try {
+  $stmt = $conn->prepare("SELECT restaurant_name, email, contact_number, category, address FROM vendors WHERE id = :id");
+  $stmt->bindParam(':id', $_SESSION['vendor_id']);
+  $stmt->execute();
+  $vendor_data = $stmt->fetch(PDO::FETCH_ASSOC);
+  if ($vendor_data) {
+    $vendor['restaurant_name'] = !empty($vendor_data['restaurant_name']) ? $vendor_data['restaurant_name'] : 'N/A';
+    $vendor['email'] = !empty($vendor_data['email']) ? $vendor_data['email'] : 'N/A';
+    $vendor['contact_number'] = !empty($vendor_data['contact_number']) ? $vendor_data['contact_number'] : 'N/A';
+    $vendor['category'] = !empty($vendor_data['category']) ? $vendor_data['category'] : '';
+    $vendor['address'] = !empty($vendor_data['address']) ? $vendor_data['address'] : 'N/A';
+  } else {
+    $error_message = "Vendor not found.";
+    header("refresh:2;url=vendor-login.php");
+  }
+} catch (PDOException $e) {
+  $error_message = "Error fetching vendor details: " . $e->getMessage();
+}
+
+// Handle update
+if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['update'])) {
+  // Sanitize inputs
+  $restaurant_name = trim(htmlspecialchars($_POST['restaurantName'], ENT_QUOTES, 'UTF-8'));
+  $email = filter_var($_POST['email'], FILTER_SANITIZE_EMAIL);
+  $contact_number = trim(htmlspecialchars($_POST['contactNumber'], ENT_QUOTES, 'UTF-8'));
+  $category = trim(htmlspecialchars($_POST['category'], ENT_QUOTES, 'UTF-8'));
+  $address = trim(htmlspecialchars($_POST['address'], ENT_QUOTES, 'UTF-8'));
+  $new_password = $_POST['newPassword'];
+  $confirm_password = $_POST['confirmPassword'];
+
+  // Server-side validation
+  if (empty($restaurant_name) || empty($email) || empty($contact_number) || empty($category) || empty($address)) {
+    $error_message = "Restaurant name, email, contact number, category, and address are required.";
+  } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+    $error_message = "Please enter a valid email.";
+  } elseif (!preg_match("/^\+?\d{10,15}$/", $contact_number)) {
+    $error_message = "Please enter a valid contact number.";
+  } elseif (strlen($address) > 255) {
+    $error_message = "Address must not exceed 255 characters.";
+  } elseif ($new_password !== '' || $confirm_password !== '') {
+    if (strlen($new_password) < 6) {
+      $error_message = "Password must be at least 6 characters.";
+    } elseif ($new_password !== $confirm_password) {
+      $error_message = "Passwords do not match.";
+    }
+  } else {
+    try {
+      // Check if email is taken by another vendor
+      $stmt = $conn->prepare("SELECT id FROM vendors WHERE email = :email AND id != :id");
+      $stmt->bindParam(':email', $email);
+      $stmt->bindParam(':id', $_SESSION['vendor_id']);
+      $stmt->execute();
+      if ($stmt->fetch()) {
+        $error_message = "Email is already in use by another vendor.";
+      } else {
+        // Prepare update query
+        $query = "UPDATE vendors SET restaurant_name = :restaurant_name, email = :email, contact_number = :contact_number, category = :category, address = :address";
+        $params = [
+          ':restaurant_name' => $restaurant_name,
+          ':email' => $email,
+          ':contact_number' => $contact_number,
+          ':category' => $category,
+          ':address' => $address,
+          ':id' => $_SESSION['vendor_id']
+        ];
+
+        // Add password update if provided
+        if (!empty($new_password)) {
+          $hashed_password = password_hash($new_password, PASSWORD_DEFAULT);
+          $query .= ", password = :password";
+          $params[':password'] = $hashed_password;
+        }
+
+        $query .= " WHERE id = :id";
+        $stmt = $conn->prepare($query);
+        $stmt->execute($params);
+
+        if ($stmt->rowCount() > 0) {
+          $success_message = "Details updated successfully!";
+          // Update displayed vendor details
+          $vendor['restaurant_name'] = $restaurant_name;
+          $vendor['email'] = $email;
+          $vendor['contact_number'] = $contact_number;
+          $vendor['category'] = $category;
+          $vendor['address'] = $address;
+        } else {
+          $error_message = "No changes made or vendor not found.";
+        }
+      }
+    } catch (PDOException $e) {
+      $error_message = "Error updating details: " . $e->getMessage();
+    }
+  }
+}
+?>
+
 <!DOCTYPE html>
 <html lang="en">
 
@@ -162,7 +291,8 @@
     }
 
     .form-group input,
-    .form-group select {
+    .form-group select,
+    .form-group textarea {
       border: 2px solid var(--gray-300);
       border-radius: 8px;
       padding: 0.75rem;
@@ -171,7 +301,8 @@
     }
 
     .form-group input:focus,
-    .form-group select:focus {
+    .form-group select:focus,
+    .form-group textarea:focus {
       border-color: var(--primary-color);
       box-shadow: 0 0 0 0.2rem rgba(255, 107, 53, 0.25);
       outline: none;
@@ -197,16 +328,16 @@
       color: var(--danger-color);
       font-size: 0.9rem;
       margin-top: 0.5rem;
-      display: none;
       text-align: center;
+      <?php echo !empty($error_message) ? 'display: block;' : 'display: none;'; ?>
     }
 
     .success-message {
       color: var(--success-color);
       font-size: 0.9rem;
       margin-top: 0.5rem;
-      display: none;
       text-align: center;
+      <?php echo !empty($success_message) ? 'display: block;' : 'display: none;'; ?>
     }
 
     /* Responsive */
@@ -262,7 +393,13 @@
 </head>
 
 <body>
- <?php include 'includes/sidebar.php'; ?>
+    
+    <?php include 'includes/sidebar.php'; ?>
+
+  <!-- Sidebar Toggle for Mobile -->
+  <button class="sidebar-toggle d-none" id="sidebarToggle">
+    <i class="fas fa-bars"></i>
+  </button>
 
   <!-- Main Content -->
   <div class="main-content">
@@ -271,41 +408,47 @@
         <h2 class="mb-4">Settings</h2>
         <div class="settings-container fade-in">
           <h2 class="settings-title">Update Vendor Details</h2>
-          <div id="errorMessage" class="error-message"></div>
-          <div id="successMessage" class="success-message">Details updated successfully!</div>
-          <div class="form-group mb-3">
-            <label for="restaurantName">Restaurant Name</label>
-            <input type="text" class="form-control" id="restaurantName" placeholder="Enter restaurant name">
-          </div>
-          <div class="form-group mb-3">
-            <label for="email">Email</label>
-            <input type="email" class="form-control" id="email" placeholder="Enter your email" readonly>
-          </div>
-          <div class="form-group mb-3">
-            <label for="contactNumber">Contact Number</label>
-            <input type="tel" class="form-control" id="contactNumber" placeholder="Enter contact number">
-          </div>
-          <div class="form-group mb-3">
-            <label for="category">Restaurant Category</label>
-            <select class="form-control" id="category">
-              <option value="" disabled>Select category</option>
-              <option value="Pizza">Pizza</option>
-              <option value="Burgers">Burgers</option>
-              <option value="Sushi">Sushi</option>
-              <option value="Italian">Italian</option>
-              <option value="Desserts">Desserts</option>
-              <option value="Fast Food">Fast Food</option>
-            </select>
-          </div>
-          <div class="form-group mb-3">
-            <label for="newPassword">New Password (optional)</label>
-            <input type="password" class="form-control" id="newPassword" placeholder="Enter new password">
-          </div>
-          <div class="form-group mb-3">
-            <label for="confirmNewPassword">Confirm New Password</label>
-            <input type="password" class="form-control" id="confirmNewPassword" placeholder="Confirm new password">
-          </div>
-          <button class="btn btn-save" onclick="handleUpdate()">Save Changes</button>
+          <div id="errorMessage" class="error-message"><?php echo htmlspecialchars($error_message); ?></div>
+          <div id="successMessage" class="success-message"><?php echo htmlspecialchars($success_message); ?></div>
+          <form method="POST" action="">
+            <div class="form-group mb-3">
+              <label for="restaurantName">Restaurant Name</label>
+              <input type="text" class="form-control" id="restaurantName" name="restaurantName" placeholder="Enter restaurant name" value="<?php echo htmlspecialchars($vendor['restaurant_name']); ?>" required>
+            </div>
+            <div class="form-group mb-3">
+              <label for="email">Email</label>
+              <input type="email" class="form-control" id="email" name="email" placeholder="Enter your email" value="<?php echo htmlspecialchars($vendor['email']); ?>" required>
+            </div>
+            <div class="form-group mb-3">
+              <label for="contactNumber">Contact Number</label>
+              <input type="tel" class="form-control" id="contactNumber" name="contactNumber" placeholder="Enter contact number" value="<?php echo htmlspecialchars($vendor['contact_number']); ?>" required>
+            </div>
+            <div class="form-group mb-3">
+              <label for="category">Restaurant Category</label>
+              <select class="form-select" id="category" name="category" required>
+                <option value="" disabled>Select category</option>
+                <option value="Pizza" <?php echo $vendor['category'] == 'Pizza' ? 'selected' : ''; ?>>Pizza</option>
+                <option value="Burgers" <?php echo $vendor['category'] == 'Burgers' ? 'selected' : ''; ?>>Burgers</option>
+                <option value="Sushi" <?php echo $vendor['category'] == 'Sushi' ? 'selected' : ''; ?>>Sushi</option>
+                <option value="Italian" <?php echo $vendor['category'] == 'Italian' ? 'selected' : ''; ?>>Italian</option>
+                <option value="Desserts" <?php echo $vendor['category'] == 'Desserts' ? 'selected' : ''; ?>>Desserts</option>
+                <option value="Fast Food" <?php echo $vendor['category'] == 'Fast Food' ? 'selected' : ''; ?>>Fast Food</option>
+              </select>
+            </div>
+            <div class="form-group mb-3">
+              <label for="address">Address</label>
+              <textarea class="form-control" id="address" name="address" placeholder="Enter restaurant address" rows="4" required><?php echo htmlspecialchars($vendor['address']); ?></textarea>
+            </div>
+            <div class="form-group mb-3">
+              <label for="newPassword">New Password (leave blank to keep current)</label>
+              <input type="password" class="form-control" id="newPassword" name="newPassword" placeholder="Enter new password">
+            </div>
+            <div class="form-group mb-3">
+              <label for="confirmPassword">Confirm New Password</label>
+              <input type="password" class="form-control" id="confirmPassword" name="confirmPassword" placeholder="Confirm new password">
+            </div>
+            <button type="submit" name="update" class="btn btn-save">Save Changes</button>
+          </form>
         </div>
       </div>
     </section>
@@ -316,17 +459,10 @@
 
   <!-- Custom JavaScript -->
   <script>
-    // DOM Elements
-    const sidebar = document.getElementById('sidebar');
-    const sidebarToggle = document.getElementById('sidebarToggle');
-
     // Initialize page
     document.addEventListener('DOMContentLoaded', function() {
-      // Load vendor details
-      loadVendorDetails();
-
       // Highlight active sidebar link
-      const currentPage = window.location.pathname.split('/').pop() || 'vendor-settings.php';
+      const currentPage = window.location.pathname.split('/').pop() || 'settings.php';
       document.querySelectorAll('.sidebar .nav-link').forEach(link => {
         const href = link.getAttribute('href');
         if (href === currentPage) {
@@ -337,6 +473,8 @@
       });
 
       // Toggle sidebar on mobile
+      const sidebar = document.getElementById('sidebar');
+      const sidebarToggle = document.getElementById('sidebarToggle');
       sidebarToggle.addEventListener('click', function() {
         sidebar.classList.toggle('active');
       });
@@ -356,7 +494,6 @@
       }, {
         threshold: 0.1
       });
-
       document.querySelectorAll('.fade-in').forEach(el => observer.observe(el));
 
       // Navbar scroll effect
@@ -372,85 +509,12 @@
       });
 
       // Allow save on Enter key
-      document.getElementById('confirmNewPassword').addEventListener('keypress', function(e) {
+      document.getElementById('confirmPassword').addEventListener('keypress', function(e) {
         if (e.key === 'Enter') {
-          handleUpdate();
+          document.querySelector('form').submit();
         }
       });
     });
-
-    // Load vendor details
-    function loadVendorDetails() {
-      const vendors = JSON.parse(localStorage.getItem('vendors') || '[]');
-      const loggedInVendor = vendors.find(v => v.email === localStorage.getItem('vendorEmail')) || {};
-      document.getElementById('restaurantName').value = loggedInVendor.restaurantName || '';
-      document.getElementById('email').value = loggedInVendor.email || '';
-      document.getElementById('contactNumber').value = loggedInVendor.contactNumber || '';
-      document.getElementById('category').value = loggedInVendor.category || '';
-    }
-
-    // Handle update
-    window.handleUpdate = function() {
-      const restaurantName = document.getElementById('restaurantName').value.trim();
-      const contactNumber = document.getElementById('contactNumber').value.trim();
-      const category = document.getElementById('category').value;
-      const newPassword = document.getElementById('newPassword').value.trim();
-      const confirmNewPassword = document.getElementById('confirmNewPassword').value.trim();
-      const errorMessage = document.getElementById('errorMessage');
-      const successMessage = document.getElementById('successMessage');
-
-      // Reset messages
-      errorMessage.style.display = 'none';
-      successMessage.style.display = 'none';
-
-      // Validation
-      if (!restaurantName || !contactNumber || !category) {
-        errorMessage.textContent = 'Please fill in all required fields';
-        errorMessage.style.display = 'block';
-        return;
-      }
-
-      if (!/^\+?\d{10,15}$/.test(contactNumber)) {
-        errorMessage.textContent = 'Please enter a valid contact number';
-        errorMessage.style.display = 'block';
-        return;
-      }
-
-      if (newPassword || confirmNewPassword) {
-        if (newPassword !== confirmNewPassword) {
-          errorMessage.textContent = 'Passwords do not match';
-          errorMessage.style.display = 'block';
-          return;
-        }
-        if (newPassword.length < 6) {
-          errorMessage.textContent = 'Password must be at least 6 characters';
-          errorMessage.style.display = 'block';
-          return;
-        }
-      }
-
-      // Update vendor data
-      const vendors = JSON.parse(localStorage.getItem('vendors') || '[]');
-      const vendorEmail = localStorage.getItem('vendorEmail');
-      const vendorIndex = vendors.findIndex(v => v.email === vendorEmail);
-      if (vendorIndex !== -1) {
-        vendors[vendorIndex] = {
-          ...vendors[vendorIndex],
-          restaurantName,
-          contactNumber,
-          category,
-          password: newPassword || vendors[vendorIndex].password
-        };
-        localStorage.setItem('vendors', JSON.stringify(vendors));
-        successMessage.style.display = 'block';
-        setTimeout(() => {
-          window.location.href = 'vendor.php';
-        }, 2000);
-      } else {
-        errorMessage.textContent = 'Vendor not found';
-        errorMessage.style.display = 'block';
-      }
-    };
   </script>
 </body>
 

@@ -1,3 +1,73 @@
+<?php
+// Start the vendor session
+session_name('vendor_session');
+session_start();
+
+// Database connection
+$servername = "localhost";
+$username = "root";
+$password = "";
+$dbname = "foodiehub";
+
+try {
+  $conn = new PDO("mysql:host=$servername;dbname=$dbname", $username, $password);
+  $conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+} catch (PDOException $e) {
+  die("Connection failed: " . $e->getMessage());
+}
+
+// Handle registration
+$error_message = '';
+$success_message = '';
+if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['register'])) {
+  // Sanitize inputs
+  $restaurant_name = trim(htmlspecialchars($_POST['restaurantName'], ENT_QUOTES, 'UTF-8'));
+  $email = filter_var($_POST['email'], FILTER_SANITIZE_EMAIL);
+  $password = $_POST['password'];
+  $confirm_password = $_POST['confirmPassword'];
+  $category = trim(htmlspecialchars($_POST['category'], ENT_QUOTES, 'UTF-8'));
+  $contact_number = trim(htmlspecialchars($_POST['contactNumber'], ENT_QUOTES, 'UTF-8'));
+
+  // Server-side validation
+  if (empty($restaurant_name) || empty($email) || empty($password) || empty($confirm_password) || empty($category) || empty($contact_number)) {
+    $error_message = "Please fill in all fields.";
+  } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+    $error_message = "Please enter a valid email.";
+  } elseif (strlen($password) < 6) {
+    $error_message = "Password must be at least 6 characters.";
+  } elseif ($password !== $confirm_password) {
+    $error_message = "Passwords do not match.";
+  } elseif (!preg_match("/^\+?\d{10,15}$/", $contact_number)) {
+    $error_message = "Please enter a valid contact number.";
+  } else {
+    try {
+      // Check if email already exists
+      $stmt = $conn->prepare("SELECT id FROM vendors WHERE email = :email");
+      $stmt->bindParam(':email', $email);
+      $stmt->execute();
+      if ($stmt->fetch()) {
+        $error_message = "Email is already registered.";
+      } else {
+        // Insert new vendor
+        $hashed_password = password_hash($password, PASSWORD_DEFAULT);
+        $stmt = $conn->prepare("INSERT INTO vendors (restaurant_name, email, password, category, contact_number) VALUES (:restaurant_name, :email, :password, :category, :contact_number)");
+        $stmt->bindParam(':restaurant_name', $restaurant_name);
+        $stmt->bindParam(':email', $email);
+        $stmt->bindParam(':password', $hashed_password);
+        $stmt->bindParam(':category', $category);
+        $stmt->bindParam(':contact_number', $contact_number);
+        $stmt->execute();
+
+        $success_message = "Registration successful! Redirecting to login...";
+        header("refresh:2;url=vendor-login.php");
+      }
+    } catch (PDOException $e) {
+      $error_message = "Error: " . $e->getMessage();
+    }
+  }
+}
+?>
+
 <!DOCTYPE html>
 <html lang="en">
 
@@ -44,7 +114,6 @@
       padding: 2rem 0;
     }
 
-    /* Register Card */
     .register-card {
       background: var(--white);
       border-radius: var(--border-radius);
@@ -113,19 +182,18 @@
       color: var(--danger-color);
       font-size: 0.9rem;
       margin-top: 0.5rem;
-      display: none;
       text-align: center;
+      <?php echo !empty($error_message) ? 'display: block;' : 'display: none;'; ?>
     }
 
     .success-message {
       color: var(--success-color);
       font-size: 0.9rem;
       margin-top: 0.5rem;
-      display: none;
       text-align: center;
+      <?php echo !empty($success_message) ? 'display: block;' : 'display: none;'; ?>
     }
 
-    /* Links */
     .login-link,
     .home-link {
       color: var(--primary-color);
@@ -140,7 +208,6 @@
       text-decoration: underline;
     }
 
-    /* Fade in animation */
     .fade-in {
       opacity: 0;
       transform: translateY(30px);
@@ -152,7 +219,6 @@
       transform: translateY(0);
     }
 
-    /* Responsive */
     @media (max-width: 576px) {
       .register-card {
         margin: 1rem;
@@ -166,41 +232,43 @@
   <!-- Registration Form -->
   <div class="register-card fade-in">
     <h2><i class="fas fa-utensils me-2"></i>Vendor Registration</h2>
-    <div id="errorMessage" class="error-message"></div>
-    <div id="successMessage" class="success-message">Registration successful! Redirecting to login...</div>
-    <div class="mb-3">
-      <label for="restaurantName" class="form-label">Restaurant Name</label>
-      <input type="text" class="form-control" id="restaurantName" placeholder="Enter restaurant name" required>
-    </div>
-    <div class="mb-3">
-      <label for="email" class="form-label">Email</label>
-      <input type="email" class="form-control" id="email" placeholder="Enter your email" required>
-    </div>
-    <div class="mb-3">
-      <label for="password" class="form-label">Password</label>
-      <input type="password" class="form-control" id="password" placeholder="Enter your password" required>
-    </div>
-    <div class="mb-3">
-      <label for="confirmPassword" class="form-label">Confirm Password</label>
-      <input type="password" class="form-control" id="confirmPassword" placeholder="Confirm your password" required>
-    </div>
-    <div class="mb-3">
-      <label for="category" class="form-label">Restaurant Category</label>
-      <select class="form-select" id="category" required>
-        <option value="" disabled selected>Select category</option>
-        <option value="Pizza">Pizza</option>
-        <option value="Burgers">Burgers</option>
-        <option value="Sushi">Sushi</option>
-        <option value="Italian">Italian</option>
-        <option value="Desserts">Desserts</option>
-        <option value="Fast Food">Fast Food</option>
-      </select>
-    </div>
-    <div class="mb-3">
-      <label for="contactNumber" class="form-label">Contact Number</label>
-      <input type="tel" class="form-control" id="contactNumber" placeholder="Enter contact number" required>
-    </div>
-    <button class="btn btn-register" onclick="handleRegister()">Register</button>
+    <div id="errorMessage" class="error-message"><?php echo htmlspecialchars($error_message); ?></div>
+    <div id="successMessage" class="success-message"><?php echo htmlspecialchars($success_message); ?></div>
+    <form method="POST" action="">
+      <div class="mb-3">
+        <label for="restaurantName" class="form-label">Restaurant Name</label>
+        <input type="text" class="form-control" id="restaurantName" name="restaurantName" placeholder="Enter restaurant name" value="<?php echo isset($_POST['restaurantName']) ? htmlspecialchars($_POST['restaurantName']) : ''; ?>" required>
+      </div>
+      <div class="mb-3">
+        <label for="email" class="form-label">Email</label>
+        <input type="email" class="form-control" id="email" name="email" placeholder="Enter your email" value="<?php echo isset($_POST['email']) ? htmlspecialchars($_POST['email']) : ''; ?>" required>
+      </div>
+      <div class="mb-3">
+        <label for="password" class="form-label">Password</label>
+        <input type="password" class="form-control" id="password" name="password" placeholder="Enter your password" required>
+      </div>
+      <div class="mb-3">
+        <label for="confirmPassword" class="form-label">Confirm Password</label>
+        <input type="password" class="form-control" id="confirmPassword" name="confirmPassword" placeholder="Confirm your password" required>
+      </div>
+      <div class="mb-3">
+        <label for="category" class="form-label">Restaurant Category</label>
+        <select class="form-select" id="category" name="category" required>
+          <option value="" disabled <?php echo !isset($_POST['category']) ? 'selected' : ''; ?>>Select category</option>
+          <option value="Pizza" <?php echo isset($_POST['category']) && $_POST['category'] == 'Pizza' ? 'selected' : ''; ?>>Pizza</option>
+          <option value="Burgers" <?php echo isset($_POST['category']) && $_POST['category'] == 'Burgers' ? 'selected' : ''; ?>>Burgers</option>
+          <option value="Sushi" <?php echo isset($_POST['category']) && $_POST['category'] == 'Sushi' ? 'selected' : ''; ?>>Sushi</option>
+          <option value="Italian" <?php echo isset($_POST['category']) && $_POST['category'] == 'Italian' ? 'selected' : ''; ?>>Italian</option>
+          <option value="Desserts" <?php echo isset($_POST['category']) && $_POST['category'] == 'Desserts' ? 'selected' : ''; ?>>Desserts</option>
+          <option value="Fast Food" <?php echo isset($_POST['category']) && $_POST['category'] == 'Fast Food' ? 'selected' : ''; ?>>Fast Food</option>
+        </select>
+      </div>
+      <div class="mb-3">
+        <label for="contactNumber" class="form-label">Contact Number</label>
+        <input type="tel" class="form-control" id="contactNumber" name="contactNumber" placeholder="Enter contact number" value="<?php echo isset($_POST['contactNumber']) ? htmlspecialchars($_POST['contactNumber']) : ''; ?>" required>
+      </div>
+      <button type="submit" name="register" class="btn btn-register">Register</button>
+    </form>
     <div class="text-center mt-3">
       <p>Already have an account? <a href="vendor-login.php" class="login-link">Login here</a></p>
       <p><a href="index.php" class="home-link">Back to Home</a></p>
@@ -212,79 +280,6 @@
 
   <!-- Custom JavaScript -->
   <script>
-    // Handle registration
-    window.handleRegister = function() {
-      const restaurantName = document.getElementById('restaurantName').value.trim();
-      const email = document.getElementById('email').value.trim();
-      const password = document.getElementById('password').value.trim();
-      const confirmPassword = document.getElementById('confirmPassword').value.trim();
-      const category = document.getElementById('category').value;
-      const contactNumber = document.getElementById('contactNumber').value.trim();
-      const errorMessage = document.getElementById('errorMessage');
-      const successMessage = document.getElementById('successMessage');
-
-      // Reset messages
-      errorMessage.style.display = 'none';
-      successMessage.style.display = 'none';
-
-      // Basic validation
-      if (!restaurantName || !email || !password || !confirmPassword || !category || !contactNumber) {
-        errorMessage.textContent = 'Please fill in all fields';
-        errorMessage.style.display = 'block';
-        return;
-      }
-
-      if (password !== confirmPassword) {
-        errorMessage.textContent = 'Passwords do not match';
-        errorMessage.style.display = 'block';
-        return;
-      }
-
-      if (password.length < 6) {
-        errorMessage.textContent = 'Password must be at least 6 characters';
-        errorMessage.style.display = 'block';
-        return;
-      }
-
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-        errorMessage.textContent = 'Please enter a valid email';
-        errorMessage.style.display = 'block';
-        return;
-      }
-
-      if (!/^\+?\d{10,15}$/.test(contactNumber)) {
-        errorMessage.textContent = 'Please enter a valid contact number';
-        errorMessage.style.display = 'block';
-        return;
-      }
-
-      // Simulate checking if email is already registered
-      const existingVendors = JSON.parse(localStorage.getItem('vendors') || '[]');
-      if (existingVendors.some(vendor => vendor.email === email)) {
-        errorMessage.textContent = 'Email is already registered';
-        errorMessage.style.display = 'block';
-        return;
-      }
-
-      // Store vendor data (in real app, send to backend)
-      const newVendor = {
-        restaurantName,
-        email,
-        password, // In real app, hash this
-        category,
-        contactNumber,
-        registeredAt: new Date().toISOString()
-      };
-      existingVendors.push(newVendor);
-      localStorage.setItem('vendors', JSON.stringify(existingVendors));
-
-      // Show success message and redirect
-      successMessage.style.display = 'block';
-      setTimeout(() => {
-        window.location.href = 'vendor-login.php';
-      }, 2000);
-    };
-
     // Initialize page
     document.addEventListener('DOMContentLoaded', function() {
       // Fade-in animation
@@ -294,7 +289,7 @@
       // Allow registration on Enter key
       document.getElementById('confirmPassword').addEventListener('keypress', function(e) {
         if (e.key === 'Enter') {
-          handleRegister();
+          document.querySelector('form').submit();
         }
       });
     });

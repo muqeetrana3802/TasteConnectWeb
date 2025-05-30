@@ -1,0 +1,12 @@
+<?php
+// Start the vendor session
+session_name('vendor_session');
+session_start();
+
+// Destroy the session
+session_unset();
+session_destroy();
+
+// Redirect to login page
+header("Location: vendor-login.php");
+exit();
