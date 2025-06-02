@@ -28,10 +28,11 @@
         if (isset($_SESSION['user_id'])) {
         ?>
           <li class="nav-item dropdown">
-            <a class="nav-link dropdown-toggle" href="#" id="userDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">
-              <?php echo htmlspecialchars($_SESSION['first_name']); ?>
+            <a style="background-color: tomato;color: white !important;" class="px-5 nav-link" href="#" id="userDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+              <?php echo htmlspecialchars($_SESSION['first_name']); ?> <i class="fas fa-arrow-down"></i>
             </a>
             <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="userDropdown">
+              <li><a class="dropdown-item" href="user.php">Dashboard</a></li>
               <li><a class="dropdown-item" href="logout.php">Logout</a></li>
             </ul>
           </li>
@@ -45,3 +46,8 @@
     </div>
   </div>
 </nav>
+
+
+<style>
+  
+</style>

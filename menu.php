@@ -1,8 +1,222 @@
 <?php
 session_start();
-include 'config/db.php'
+include 'config/db.php';
 
+
+
+// Configuration constants
+define('DELIVERY_FEE', 250.00);
+
+// Check if user is logged in
+$user_id = isset($_SESSION['user_id']) ? (int)$_SESSION['user_id'] : 0;
+
+// Check if user has an active subscription
+$has_subscription = false;
+$subscription_plan = null;
+$discount_percentage = 0.00;
+if ($user_id > 0) {
+  $subQuery = "SELECT s.plan_type, s.discount_percentage 
+                 FROM user_subscriptions us 
+                 LEFT JOIN subscriptions s ON us.subscription_id = s.id 
+                 WHERE us.user_id = ? AND us.status = 'active' LIMIT 1";
+  $stmt = mysqli_prepare($conn, $subQuery);
+  mysqli_stmt_bind_param($stmt, 'i', $user_id);
+  mysqli_stmt_execute($stmt);
+  $subResult = mysqli_stmt_get_result($stmt);
+  if ($subResult && mysqli_num_rows($subResult) > 0) {
+    $has_subscription = true;
+    $subData = mysqli_fetch_assoc($subResult);
+    $subscription_plan = $subData['plan_type'];
+    $discount_percentage = (float)$subData['discount_percentage'];
+  }
+}
+
+// Fetch vendor details
+$vendor_id = isset($_GET['vendor_id']) ? (int)$_GET['vendor_id'] : 1; // Default to 1 or modify as needed
+$vendorQuery = "SELECT v.*, vi.image_path 
+                FROM vendors v 
+                LEFT JOIN vendor_images vi ON v.id = vi.vendor_id 
+                WHERE v.id = ? LIMIT 1";
+$stmt = mysqli_prepare($conn, $vendorQuery);
+mysqli_stmt_bind_param($stmt, 'i', $vendor_id);
+mysqli_stmt_execute($stmt);
+$vendorResult = mysqli_stmt_get_result($stmt);
+$vendor = mysqli_fetch_assoc($vendorResult);
+$vendor_id = $vendor ? (int)$vendor['id'] : 0;
+
+// Fetch menu items for the vendor
+$menuQuery = "SELECT * FROM menu_items WHERE vendor_id = ? ORDER BY category, name";
+$stmt = mysqli_prepare($conn, $menuQuery);
+mysqli_stmt_bind_param($stmt, 'i', $vendor_id);
+mysqli_stmt_execute($stmt);
+$menuResult = mysqli_stmt_get_result($stmt);
+$menuItems = [];
+$categories = [];
+
+if ($menuResult) {
+  while ($row = mysqli_fetch_assoc($menuResult)) {
+    $row['image'] = !empty($row['image']) ? 'vendor/' . $row['image'] : "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 200'><rect fill='%23ff6b35' width='400' height='200'/><text x='200' y='110' text-anchor='middle' fill='white' font-size='30'>🍽️</text></svg>";
+    $menuItems[] = $row;
+    if (!in_array($row['category'], $categories)) {
+      $categories[] = $row['category'];
+    }
+  }
+}
+
+// Fetch available reservation slots
+$slotsQuery = "SELECT * FROM reservation_slots WHERE vendor_id = ? AND slot_date >= CURDATE() AND status = 'available' ORDER BY slot_date, slot_time";
+$stmt = mysqli_prepare($conn, $slotsQuery);
+mysqli_stmt_bind_param($stmt, 'i', $vendor_id);
+mysqli_stmt_execute($stmt);
+$slotsResult = mysqli_stmt_get_result($stmt);
+$reservationSlots = [];
+if ($slotsResult) {
+  while ($row = mysqli_fetch_assoc($slotsResult)) {
+    $reservationSlots[] = $row;
+  }
+}
+
+// Check reservation eligibility based on subscription
+$reservation_limit = 0;
+if ($has_subscription) {
+  $reservation_limit = match ($subscription_plan) {
+    'Basic' => 1,
+    'Standard' => 3,
+    'Premium' => PHP_INT_MAX,
+    default => 0
+  };
+}
+
+// Count user's reservations this week
+$current_week_start = date('Y-m-d', strtotime('monday this week'));
+$reservationCountQuery = "SELECT COUNT(*) as count FROM reservations WHERE user_id = ? AND reservation_date >= ? AND status = 'confirmed'";
+$stmt = mysqli_prepare($conn, $reservationCountQuery);
+mysqli_stmt_bind_param($stmt, 'is', $user_id, $current_week_start);
+mysqli_stmt_execute($stmt);
+$reservationCountResult = mysqli_stmt_get_result($stmt);
+$weekly_reservations = mysqli_fetch_assoc($reservationCountResult)['count'];
+
+// Handle reservation submission
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['book_reservation'])) {
+  if ($user_id === 0) {
+    header("Location: login.php?redirect=menu.php");
+    exit;
+  }
+
+  $slot_id = (int)$_POST['slot_id'];
+  $party_size = (int)$_POST['party_size'];
+
+  // Validate party size
+  if ($party_size < 1 || $party_size > 20) {
+    $reservation_error = "Party size must be between 1 and 20.";
+  } elseif ($weekly_reservations >= $reservation_limit) {
+    $reservation_error = "You have reached your weekly reservation limit for your $subscription_plan plan.";
+  } else {
+    // Fetch slot details
+    $slotQuery = "SELECT capacity, slot_date, slot_time FROM reservation_slots WHERE id = ? AND vendor_id = ? AND status = 'available'";
+    $stmt = mysqli_prepare($conn, $slotQuery);
+    mysqli_stmt_bind_param($stmt, 'ii', $slot_id, $vendor_id);
+    mysqli_stmt_execute($stmt);
+    $slotResult = mysqli_stmt_get_result($stmt);
+    if ($slotResult && $slot = mysqli_fetch_assoc($slotResult)) {
+      if ($party_size <= $slot['capacity']) {
+        $reservation_date = $slot['slot_date'] . ' ' . $slot['slot_time'];
+        $subscription_id = null;
+        if ($has_subscription) {
+          $subIdQuery = "SELECT subscription_id FROM user_subscriptions WHERE user_id = ? AND status = 'active' LIMIT 1";
+          $stmt = mysqli_prepare($conn, $subIdQuery);
+          mysqli_stmt_bind_param($stmt, 'i', $user_id);
+          mysqli_stmt_execute($stmt);
+          $subIdResult = mysqli_stmt_get_result($stmt);
+          $subscription_id = mysqli_fetch_assoc($subIdResult)['subscription_id'];
+        }
+
+        // Insert reservation
+        $reservationQuery = "INSERT INTO reservations (user_id, vendor_id, subscription_id, slot_id, reservation_date, party_size, status, created_at)
+                                    VALUES (?, ?, ?, ?, ?, ?, 'confirmed', NOW())";
+        $stmt = mysqli_prepare($conn, $reservationQuery);
+        mysqli_stmt_bind_param($stmt, 'iiisis', $user_id, $vendor_id, $subscription_id, $slot_id, $reservation_date, $party_size);
+        if (mysqli_stmt_execute($stmt)) {
+          // Update slot capacity
+          $new_capacity = $slot['capacity'] - $party_size;
+          $slotStatus = $new_capacity <= 0 ? 'fully_booked' : 'available';
+          $updateSlotQuery = "UPDATE reservation_slots SET capacity = ?, status = ? WHERE id = ?";
+          $stmt = mysqli_prepare($conn, $updateSlotQuery);
+          mysqli_stmt_bind_param($stmt, 'isi', $new_capacity, $slotStatus, $slot_id);
+          mysqli_stmt_execute($stmt);
+          $_SESSION['reservation_success'] = "Table reserved successfully!";
+          header("Location: menu.php");
+          exit;
+        } else {
+          $reservation_error = "Error booking reservation: " . mysqli_error($conn);
+        }
+      } else {
+        $reservation_error = "Party size exceeds available capacity for this slot.";
+      }
+    } else {
+      $reservation_error = "Selected slot is not available.";
+    }
+  }
+}
+
+// Initialize cart
+if (!isset($_SESSION['cart'])) {
+  $_SESSION['cart'] = [];
+}
+
+// Handle order submission
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['checkout'])) {
+  if ($user_id === 0) {
+    header("Location: login.php?redirect=menu.php");
+    exit;
+  }
+
+  $cart_data = json_decode($_POST['cart_data'], true);
+  $subtotal = (float)$_POST['subtotal'];
+  $delivery_address = mysqli_real_escape_string($conn, $_POST['delivery_address']);
+  $payment_method = 'Cash on Delivery';
+  $order_date = date('Y-m-d H:i:s');
+
+  // Calculate discount
+  $discount_amount = ($discount_percentage / 100) * $subtotal;
+  $subtotal_after_discount = $subtotal - $discount_amount;
+
+  // Add delivery fee for non-subscribers
+  $delivery_fee = $has_subscription ? 0 : DELIVERY_FEE;
+  $total = $subtotal_after_discount + $delivery_fee;
+
+  // Insert order
+  $orderQuery = "INSERT INTO orders (user_id, vendor_id, subtotal, discount_amount, total, delivery_address, payment_method, order_date, status, delivery_fee)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?)";
+  $stmt = mysqli_prepare($conn, $orderQuery);
+  mysqli_stmt_bind_param($stmt, 'iiddssd', $user_id, $vendor_id, $subtotal, $discount_amount, $total, $delivery_address, $payment_method, $order_date, $delivery_fee);
+  if (mysqli_stmt_execute($stmt)) {
+    $order_id = mysqli_insert_id($conn);
+
+    // Insert order items
+    foreach ($cart_data as $item) {
+      $item_id = (int)$item['id'];
+      $quantity = (int)$item['quantity'];
+      $price = (float)$item['price'];
+      $item_subtotal = $price * $quantity;
+      $itemQuery = "INSERT INTO order_items (order_id, menu_item_id, quantity, price, subtotal)
+                          VALUES (?, ?, ?, ?, ?)";
+      $stmt = mysqli_prepare($conn, $itemQuery);
+      mysqli_stmt_bind_param($stmt, 'iiidd', $order_id, $item_id, $quantity, $price, $item_subtotal);
+      mysqli_stmt_execute($stmt);
+    }
+
+    // Clear cart
+    $_SESSION['cart'] = [];
+    $_SESSION['order_id'] = $order_id;
+    header("Location: order_confirmation.php?order_id=$order_id");
+    exit;
+  } else {
+    $error = "Error placing order: " . mysqli_error($conn);
+  }
+}
 ?>
+
 <!DOCTYPE html>
 <html lang="en">
 
@@ -43,7 +257,6 @@ include 'config/db.php'
       background: var(--gray-100);
     }
 
-    /* Navbar Styles */
     .navbar {
       background: var(--white) !important;
       box-shadow: var(--shadow);
@@ -103,7 +316,6 @@ include 'config/db.php'
       color: var(--white);
     }
 
-    /* Page Header */
     .page-header {
       background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
       color: var(--white);
@@ -164,7 +376,6 @@ include 'config/db.php'
       font-size: 0.9rem;
     }
 
-    /* Search and Filter Section */
     .search-filter-section {
       background: var(--white);
       padding: 2rem 0;
@@ -226,7 +437,6 @@ include 'config/db.php'
       transform: translateY(-2px);
     }
 
-    /* Menu Items */
     .menu-grid {
       padding: 3rem 0;
     }
@@ -252,6 +462,7 @@ include 'config/db.php'
       height: 180px;
       object-fit: cover;
       transition: var(--transition);
+      loading: lazy;
     }
 
     .menu-card:hover .menu-image {
@@ -308,7 +519,6 @@ include 'config/db.php'
       box-shadow: var(--shadow);
     }
 
-    /* No Results */
     .no-results {
       text-align: center;
       padding: 4rem 0;
@@ -321,7 +531,6 @@ include 'config/db.php'
       margin-bottom: 1.5rem;
     }
 
-    /* Loading Animation */
     .loading {
       display: flex;
       justify-content: center;
@@ -348,7 +557,6 @@ include 'config/db.php'
       }
     }
 
-    /* Cart Sidebar */
     .cart-sidebar {
       position: fixed;
       top: 0;
@@ -358,7 +566,7 @@ include 'config/db.php'
       background: var(--white);
       box-shadow: -5px 0 15px rgba(0, 0, 0, 0.1);
       transition: right 0.3s ease;
-      z-index: 1000;
+      z-index: 99999;
       padding: 2rem;
       overflow-y: auto;
     }
@@ -412,6 +620,25 @@ include 'config/db.php'
       font-weight: 600;
     }
 
+    .cart-item-quantity {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .quantity-btn {
+      background: var(--gray-200);
+      border: none;
+      padding: 0.25rem 0.5rem;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+
+    .quantity-btn:hover {
+      background: var(--primary-color);
+      color: var(--white);
+    }
+
     .cart-item-remove {
       background: none;
       border: none;
@@ -420,11 +647,44 @@ include 'config/db.php'
       cursor: pointer;
     }
 
+    .cart-subtotal,
+    .cart-discount,
+    .cart-delivery-fee,
     .cart-total {
-      margin-top: 1.5rem;
+      margin-top: 1rem;
       font-size: 1.1rem;
-      font-weight: 700;
+      font-weight: 600;
       text-align: right;
+    }
+
+    .cart-discount {
+      color: var(--success-color);
+    }
+
+    .checkout-form {
+      margin-top: 1.5rem;
+    }
+
+    .checkout-form label {
+      font-weight: 600;
+      margin-bottom: 0.5rem;
+      display: block;
+    }
+
+    .checkout-form input,
+    .checkout-form select {
+      width: 100%;
+      padding: 0.75rem;
+      border: 2px solid var(--gray-300);
+      border-radius: var(--border-radius);
+      transition: var(--transition);
+    }
+
+    .checkout-form input:focus,
+    .checkout-form select:focus {
+      border-color: var(--primary-color);
+      outline: none;
+      box-shadow: 0 0 0 0.2rem rgba(255, 107, 53, 0.25);
     }
 
     .checkout-btn {
@@ -483,7 +743,42 @@ include 'config/db.php'
       font-weight: 600;
     }
 
-    /* Responsive */
+    .alert {
+      margin-bottom: 1rem;
+    }
+
+    .reservation-section {
+      padding: 3rem 0;
+    }
+
+    .reservation-card {
+      background: var(--white);
+      border-radius: var(--border-radius);
+      box-shadow: var(--shadow);
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .reservation-card h5 {
+      color: var(--primary-color);
+      font-weight: 600;
+    }
+
+    .book-reservation-btn {
+      background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+      border: none;
+      color: var(--white);
+      padding: 0.75rem 1.5rem;
+      border-radius: 25px;
+      font-weight: 600;
+      transition: var(--transition);
+    }
+
+    .book-reservation-btn:hover {
+      transform: translateY(-2px);
+      box-shadow: var(--shadow);
+    }
+
     @media (max-width: 768px) {
       .page-header h1 {
         font-size: 2rem;
@@ -504,7 +799,6 @@ include 'config/db.php'
       }
     }
 
-    /* Fade in animation */
     .fade-in {
       opacity: 0;
       transform: translateY(30px);
@@ -527,12 +821,14 @@ include 'config/db.php'
     <div class="container">
       <div class="row">
         <div class="col-lg-8">
-          <h1 id="restaurantName">Restaurant Menu</h1>
-          <p>Explore delicious dishes and add your favorites to the cart</p>
+          <h1 id="restaurantName"><?php echo $vendor ? htmlspecialchars($vendor['restaurant_name']) : 'Restaurant Menu'; ?></h1>
+          <p>Explore delicious dishes and book a table</p>
           <div class="shop-meta">
-            <div class="rating-stars" id="restaurantRating"></div>
-            <div class="delivery-time"><i class="fas fa-clock me-1"></i><span id="restaurantDeliveryTime"></span> min</div>
-            <div class="delivery-fee" id="restaurantDeliveryFee"></div>
+            <div class="rating-stars" id="restaurantRating">
+              <i class="fas fa-star"></i><i class="fas fa-star"></i><i class="fas fa-star"></i><i class="fas fa-star"></i><i class="fas fa-star"></i>
+            </div>
+            <div class="delivery-time"><i class="fas fa-clock me-1"></i><span id="restaurantDeliveryTime">25-35</span> min</div>
+            <div class="delivery-fee" id="restaurantDeliveryFee"><?php echo $has_subscription ? 'Free delivery' : 'PKR ' . number_format(DELIVERY_FEE, 2) . ' delivery'; ?></div>
           </div>
         </div>
       </div>
@@ -551,11 +847,65 @@ include 'config/db.php'
         </div>
         <div class="col-lg-8">
           <div class="filter-buttons" id="categoryFilters">
-            <button class="filter-btn active" data-category="all">All</button>
-            <!-- Dynamic categories will be added here -->
+            <button class="filter-btn active" data-category="all" aria-label="Filter by all categories">All</button>
+            <?php foreach ($categories as $category): ?>
+              <button class="filter-btn" data-category="<?php echo strtolower($category); ?>" aria-label="Filter by <?php echo htmlspecialchars($category); ?> category"><?php echo htmlspecialchars($category); ?></button>
+            <?php endforeach; ?>
           </div>
         </div>
       </div>
+    </div>
+  </section>
+
+  <!-- Reservation Section -->
+  <section class="reservation-section">
+    <div class="container">
+      <h3>Book a Table</h3>
+      <?php if (isset($_SESSION['reservation_success'])): ?>
+        <div class="alert alert-success">
+          <?php echo $_SESSION['reservation_success'];
+          unset($_SESSION['reservation_success']); ?>
+        </div>
+      <?php endif; ?>
+      <?php if (isset($reservation_error)): ?>
+        <div class="alert alert-danger">
+          <?php echo $reservation_error; ?>
+        </div>
+      <?php endif; ?>
+      <?php if ($user_id === 0): ?>
+        <div class="alert alert-warning">
+          Please <a href="login.php?redirect=menu.php">log in</a> to book a table.
+        </div>
+      <?php elseif ($weekly_reservations >= $reservation_limit): ?>
+        <div class="alert alert-warning">
+          You have reached your weekly reservation limit for your <?php echo $subscription_plan; ?> plan.
+        </div>
+      <?php else: ?>
+        <div class="reservation-card">
+          <h5>Available Reservation Slots</h5>
+          <?php if (empty($reservationSlots)): ?>
+            <p class="text-center text-muted">No reservation slots available. Check back later!</p>
+          <?php else: ?>
+            <form method="POST">
+              <div class="mb-3">
+                <label for="slot_id" class="form-label">Select Slot</label>
+                <select class="form-select" id="slot_id" name="slot_id" required>
+                  <?php foreach ($reservationSlots as $slot): ?>
+                    <option value="<?php echo $slot['id']; ?>">
+                      <?php echo date('M d, Y', strtotime($slot['slot_date'])) . ' at ' . date('H:i', strtotime($slot['slot_time'])) . ' (' . $slot['capacity'] . ' seats available)'; ?>
+                    </option>
+                  <?php endforeach; ?>
+                </select>
+              </div>
+              <div class="mb-3">
+                <label for="party_size" class="form-label">Party Size</label>
+                <input type="number" class="form-control" id="party_size" name="party_size" min="1" max="20" required>
+              </div>
+              <button type="submit" name="book_reservation" class="book-reservation-btn">Book Reservation</button>
+            </form>
+          <?php endif; ?>
+        </div>
+      <?php endif; ?>
     </div>
   </section>
 
@@ -563,10 +913,39 @@ include 'config/db.php'
   <section class="menu-grid">
     <div class="container">
       <div class="row" id="menuContainer">
-        <!-- Loading spinner initially -->
-        <div class="col-12 loading" id="loadingSpinner">
-          <div class="spinner"></div>
-        </div>
+        <?php if (empty($menuItems)): ?>
+          <div class="col-12 no-results text-center">
+            <i class="fas fa-search fa-2x mb-3"></i>
+            <h3>No dishes found</h3>
+            <p>Try checking back later for new menu items</p>
+          </div>
+        <?php else: ?>
+          <?php foreach ($menuItems as $item): ?>
+            <div class="col-lg-4 col-md-6 mb-4 menu-item"
+              data-category="<?php echo strtolower($item['category']); ?>"
+              data-name="<?php echo strtolower($item['name']); ?>">
+              <div class="menu-card fade-in">
+                <img src="<?php echo htmlspecialchars($item['image']); ?>"
+                  alt="<?php echo htmlspecialchars($item['name']); ?>"
+                  class="menu-image" loading="lazy">
+                <div class="menu-info">
+                  <div class="menu-category"><?php echo htmlspecialchars($item['category']); ?></div>
+                  <h5 class="menu-title"><?php echo htmlspecialchars($item['name']); ?></h5>
+                  <p class="menu-description"><?php echo htmlspecialchars($item['description']); ?></p>
+                  <div class="menu-price">PKR <?php echo number_format($item['price'], 2); ?></div>
+                  <button class="add-to-cart-btn"
+                    data-id="<?php echo $item['id']; ?>"
+                    data-name="<?php echo htmlspecialchars($item['name']); ?>"
+                    data-price="<?php echo $item['price']; ?>"
+                    data-image="<?php echo htmlspecialchars($item['image']); ?>"
+                    data-category="<?php echo htmlspecialchars($item['category']); ?>">
+                    <i class="fas fa-cart-plus me-2"></i>Add to Cart
+                  </button>
+                </div>
+              </div>
+            </div>
+          <?php endforeach; ?>
+        <?php endif; ?>
       </div>
     </div>
   </section>
@@ -577,9 +956,33 @@ include 'config/db.php'
       <h4>Your Cart</h4>
       <button class="cart-close" id="cartClose"><i class="fas fa-times"></i></button>
     </div>
+    <?php if (isset($_SESSION['order_success'])): ?>
+      <div class="alert alert-success">
+        <?php echo $_SESSION['order_success'];
+        unset($_SESSION['order_success']); ?>
+      </div>
+    <?php endif; ?>
+    <?php if (isset($error)): ?>
+      <div class="alert alert-danger">
+        <?php echo $error; ?>
+      </div>
+    <?php endif; ?>
     <div id="cartItems"></div>
-    <div class="cart-total" id="cartTotal">Total: $0.00</div>
-    <button class="checkout-btn" id="checkoutBtn">Proceed to Checkout</button>
+    <div class="cart-subtotal" id="cartSubtotal">Subtotal: PKR 0.00</div>
+    <div class="cart-discount" id="cartDiscount">Discount (<?php echo number_format($discount_percentage, 2); ?>%): PKR 0.00</div>
+    <?php if (!$has_subscription): ?>
+      <div class="cart-delivery-fee" id="cartDeliveryFee">Delivery Fee: PKR <?php echo number_format(DELIVERY_FEE, 2); ?></div>
+    <?php endif; ?>
+    <div class="cart-total" id="cartTotal">Total: PKR 0.00</div>
+    <div class="checkout-form">
+      <label for="deliveryAddress">Delivery Address</label>
+      <input type="text" id="deliveryAddress" placeholder="Enter your delivery address" required>
+      <label for="paymentMethod" class="mt-3">Payment Method</label>
+      <select id="paymentMethod" disabled>
+        <option value="cod" selected>Cash on Delivery</option>
+      </select>
+      <button class="checkout-btn" id="checkoutBtn">Proceed to Checkout</button>
+    </div>
   </div>
   <div class="cart-toggle" id="cartToggle">
     <i class="fas fa-shopping-cart"></i>
@@ -591,102 +994,13 @@ include 'config/db.php'
 
   <!-- Custom JavaScript -->
   <script>
-    // Sample menu data (in real app, this would come from API based on shop ID)
-    const menuData = {
-      1: {
-        shop: {
-          name: "Pizza Palace",
-          category: "pizza",
-          rating: 4.8,
-          reviews: 234,
-          deliveryTime: "25-35",
-          deliveryFee: "Free"
-        },
-        categories: ["Pizzas", "Sides", "Drinks", "Desserts"],
-        items: [{
-            id: 1,
-            name: "Margherita Pizza",
-            category: "Pizzas",
-            description: "Classic pizza with fresh tomatoes, mozzarella, and basil",
-            price: 12.99,
-            image: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 180'><rect fill='%23ff6b35' width='300' height='180'/><circle fill='%23ffa726' cx='150' cy='90' r='50'/><text x='150' y='100' text-anchor='middle' fill='white' font-size='28'>🍕</text></svg>"
-          },
-          {
-            id: 2,
-            name: "Pepperoni Pizza",
-            category: "Pizzas",
-            description: "Spicy pepperoni with mozzarella and tomato sauce",
-            price: 14.99,
-            image: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 180'><rect fill='%23e91e63' width='300' height='180'/><circle fill='%23ffa726' cx='150' cy='90' r='50'/><text x='150' y='100' text-anchor='middle' fill='white' font-size='28'>🍕</text></svg>"
-          },
-          {
-            id: 3,
-            name: "Garlic Bread",
-            category: "Sides",
-            description: "Crispy garlic bread with herbs",
-            price: 4.99,
-            image: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 180'><rect fill='%23ff9800' width='300' height='180'/><circle fill='%23ffa726' cx='150' cy='90' r='50'/><text x='150' y='100' text-anchor='middle' fill='white' font-size='28'>🥖</text></svg>"
-          },
-          {
-            id: 4,
-            name: "Cola",
-            category: "Drinks",
-            description: "Refreshing cola drink",
-            price: 2.99,
-            image: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 180'><rect fill='%2366bb6a' width='300' height='180'/><circle fill='%23ffa726' cx='150' cy='90' r='50'/><text x='150' y='100' text-anchor='middle' fill='white' font-size='28'>🥤</text></svg>"
-          },
-          {
-            id: 5,
-            name: "Tiramisu",
-            category: "Desserts",
-            description: "Classic Italian dessert with coffee and cream",
-            price: 6.99,
-            image: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 180'><rect fill='%239c27b0' width='300' height='180'/><circle fill='%23ffa726' cx='150' cy='90' r='50'/><text x='150' y='100' text-anchor='middle' fill='white' font-size='28'>🍰</text></svg>"
-          }
-        ]
-      },
-      2: {
-        shop: {
-          name: "Burger Junction",
-          category: "burger",
-          rating: 4.6,
-          reviews: 189,
-          deliveryTime: "20-30",
-          deliveryFee: "$2.99"
-        },
-        categories: ["Burgers", "Sides", "Drinks"],
-        items: [{
-            id: 6,
-            name: "Classic Cheeseburger",
-            category: "Burgers",
-            description: "Juicy beef patty with cheese, lettuce, and tomato",
-            price: 9.99,
-            image: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 180'><rect fill='%234caf50' width='300' height='180'/><circle fill='%23ffa726' cx='150' cy='90' r='50'/><text x='150' y='100' text-anchor='middle' fill='white' font-size='28'>🍔</text></svg>"
-          },
-          {
-            id: 7,
-            name: "French Fries",
-            category: "Sides",
-            description: "Crispy golden fries",
-            price: 3.99,
-            image: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 180'><rect fill='%23ff9800' width='300' height='180'/><circle fill='%23ffa726' cx='150' cy='90' r='50'/><text x='150' y='100' text-anchor='middle' fill='white' font-size='28'>🍟</text></svg>"
-          },
-          {
-            id: 8,
-            name: "Milkshake",
-            category: "Drinks",
-            description: "Creamy vanilla milkshake",
-            price: 4.99,
-            image: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 180'><rect fill='%2300bcd4' width='300' height='180'/><circle fill='%23ffa726' cx='150' cy='90' r='50'/><text x='150' y='100' text-anchor='middle' fill='white' font-size='28'>🥤</text></svg>"
-          }
-        ]
-      }
-      // Add more shop menus as needed
-    };
-
-    let currentMenu = [];
+    let currentMenu = <?php echo json_encode($menuItems, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
     let currentCategory = 'all';
-    let cart = [];
+    let cart = <?php echo json_encode($_SESSION['cart'], JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+    const isLoggedIn = <?php echo $user_id > 0 ? 'true' : 'false'; ?>;
+    const hasSubscription = <?php echo $has_subscription ? 'true' : 'false'; ?>;
+    const deliveryFee = hasSubscription ? 0 : <?php echo DELIVERY_FEE; ?>;
+    const discountPercentage = <?php echo $discount_percentage; ?>;
 
     // DOM Elements
     const restaurantName = document.getElementById('restaurantName');
@@ -700,81 +1014,12 @@ include 'config/db.php'
     const cartClose = document.getElementById('cartClose');
     const cartToggle = document.getElementById('cartToggle');
     const cartItemsContainer = document.getElementById('cartItems');
+    const cartSubtotal = document.getElementById('cartSubtotal');
+    const cartDiscount = document.getElementById('cartDiscount');
     const cartTotal = document.getElementById('cartTotal');
     const cartCount = document.getElementById('cartCount');
     const checkoutBtn = document.getElementById('checkoutBtn');
-    const loadingSpinner = document.getElementById('loadingSpinner');
-
-    // Initialize page
-    document.addEventListener('DOMContentLoaded', function() {
-      // Get shop ID from URL
-      const urlParams = new URLSearchParams(window.location.search);
-      const shopId = urlParams.get('shop') || '1';
-      const shopData = menuData[shopId];
-
-      if (shopData) {
-        // Update header
-        restaurantName.textContent = shopData.shop.name;
-        restaurantRating.innerHTML = generateStars(shopData.shop.rating) + ` (${shopData.shop.reviews} reviews)`;
-        restaurantDeliveryTime.textContent = shopData.shop.deliveryTime;
-        restaurantDeliveryFee.textContent = shopData.shop.deliveryFee === 'Free' ? 'Free delivery' : shopData.shop.deliveryFee + ' delivery';
-
-        // Render category filters
-        categoryFilters.innerHTML = `
-          <button class="filter-btn active" data-category="all">All</button>
-          ${shopData.categories.map(category => `
-            <button class="filter-btn" data-category="${category.toLowerCase()}">${category}</button>
-          `).join('')}
-        `;
-
-        currentMenu = shopData.items;
-        setTimeout(() => {
-          loadingSpinner.style.display = 'none';
-          renderMenu(currentMenu);
-        }, 1000);
-
-        // Add event listeners for filters
-        document.querySelectorAll('.filter-btn').forEach(button => {
-          button.addEventListener('click', function() {
-            document.querySelectorAll('.filter-btn').forEach(btn => btn.classList.remove('active'));
-            this.classList.add('active');
-            currentCategory = this.dataset.category;
-            applyFilters();
-          });
-        });
-      } else {
-        menuContainer.innerHTML = `
-          <div class="col-12 no-results">
-            <i class="fas fa-search"></i>
-            <h3>Restaurant not found</h3>
-            <p>Please select a valid restaurant.</p>
-          </div>
-        `;
-        loadingSpinner.style.display = 'none';
-      }
-    });
-
-    // Generate star rating
-    function generateStars(rating) {
-      const fullStars = Math.floor(rating);
-      const hasHalfStar = rating % 1 !== 0;
-      let stars = '';
-
-      for (let i = 0; i < fullStars; i++) {
-        stars += '<i class="fas fa-star"></i>';
-      }
-
-      if (hasHalfStar) {
-        stars += '<i class="fas fa-star-half-alt"></i>';
-      }
-
-      const emptyStars = 5 - fullStars - (hasHalfStar ? 1 : 0);
-      for (let i = 0; i < emptyStars; i++) {
-        stars += '<i class="far fa-star"></i>';
-      }
-
-      return stars;
-    }
+    const deliveryAddress = document.getElementById('deliveryAddress');
 
     // Render menu items
     function renderMenu(items) {
@@ -790,15 +1035,16 @@ include 'config/db.php'
       }
 
       const menuHtml = items.map(item => `
-        <div class="col-lg-4 col-md-6 mb-4">
+        <div class="col-lg-4 col-md-6 mb-4 menu-item" data-category="${item.category.toLowerCase()}" data-name="${item.name.toLowerCase()}">
           <div class="menu-card fade-in">
-            <img src="${item.image}" alt="${item.name}" class="menu-image">
+            <img src="${item.image}" alt="${item.name}" class="menu-image" loading="lazy">
             <div class="menu-info">
               <div class="menu-category">${item.category}</div>
               <h5 class="menu-title">${item.name}</h5>
               <p class="menu-description">${item.description}</p>
-              <div class="menu-price">$${item.price.toFixed(2)}</div>
-              <button class="add-to-cart-btn" data-id="${item.id}">
+              <div class="menu-price">PKR ${parseFloat(item.price).toFixed(2)}</div>
+              <button class="add-to-cart-btn" data-id="${item.id}" data-name="${item.name}" 
+                      data-price="${item.price}" data-image="${item.image}" data-category="${item.category}">
                 <i class="fas fa-cart-plus me-2"></i>Add to Cart
               </button>
             </div>
@@ -818,8 +1064,14 @@ include 'config/db.php'
       // Add event listeners for add to cart buttons
       document.querySelectorAll('.add-to-cart-btn').forEach(button => {
         button.addEventListener('click', function() {
-          const itemId = this.dataset.id;
-          const item = currentMenu.find(i => i.id == itemId);
+          const item = {
+            id: parseInt(this.dataset.id),
+            name: this.dataset.name,
+            price: parseFloat(this.dataset.price),
+            image: this.dataset.image,
+            category: this.dataset.category,
+            quantity: 1
+          };
           addToCart(item);
         });
       });
@@ -832,16 +1084,10 @@ include 'config/db.php'
 
     // Apply filters and search
     function applyFilters() {
-      const urlParams = new URLSearchParams(window.location.search);
-      const shopId = urlParams.get('shop') || '1';
-      let filteredItems = [...menuData[shopId].items];
-
-      // Apply category filter
+      let filteredItems = [...currentMenu];
       if (currentCategory !== 'all') {
         filteredItems = filteredItems.filter(item => item.category.toLowerCase() === currentCategory);
       }
-
-      // Apply search filter
       const searchTerm = searchInput.value.toLowerCase();
       if (searchTerm) {
         filteredItems = filteredItems.filter(item =>
@@ -850,9 +1096,7 @@ include 'config/db.php'
           item.category.toLowerCase().includes(searchTerm)
         );
       }
-
-      currentMenu = filteredItems;
-      renderMenu(currentMenu);
+      renderMenu(filteredItems);
     }
 
     // Cart functionality
@@ -861,17 +1105,16 @@ include 'config/db.php'
       if (existingItem) {
         existingItem.quantity += 1;
       } else {
-        cart.push({
-          ...item,
-          quantity: 1
-        });
+        cart.push(item);
       }
+      updateSessionCart();
       updateCart();
       openCart();
     }
 
     function removeFromCart(itemId) {
       cart = cart.filter(item => item.id !== itemId);
+      updateSessionCart();
       updateCart();
     }
 
@@ -881,7 +1124,12 @@ include 'config/db.php'
           <img src="${item.image}" alt="${item.name}">
           <div class="cart-item-info">
             <div class="cart-item-title">${item.name}</div>
-            <div class="cart-item-price">$${item.price.toFixed(2)} x ${item.quantity}</div>
+            <div class="cart-item-price">PKR ${(item.price * item.quantity).toFixed(2)}</div>
+            <div class="cart-item-quantity">
+              <button class="quantity-btn" data-id="${item.id}" data-action="decrease">-</button>
+              <span>${item.quantity}</span>
+              <button class="quantity-btn" data-id="${item.id}" data-action="increase">+</button>
+            </div>
           </div>
           <button class="cart-item-remove" data-id="${item.id}">
             <i class="fas fa-trash"></i>
@@ -889,17 +1137,53 @@ include 'config/db.php'
         </div>
       `).join('');
 
-      const total = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
-      cartTotal.textContent = `Total: $${total.toFixed(2)}`;
+      const subtotal = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
+      const discountAmount = (discountPercentage / 100) * subtotal;
+      const subtotalAfterDiscount = subtotal - discountAmount;
+      const total = subtotalAfterDiscount + deliveryFee;
+
+      cartSubtotal.textContent = `Subtotal: PKR ${subtotal.toFixed(2)}`;
+      cartDiscount.textContent = `Discount (${discountPercentage.toFixed(2)}%): PKR ${discountAmount.toFixed(2)}`;
+      cartTotal.textContent = `Total: PKR ${total.toFixed(2)}`;
       cartCount.textContent = cart.reduce((sum, item) => sum + item.quantity, 0);
 
-      // Add event listeners for remove buttons
+      // Update delivery fee display
+      const deliveryFeeElement = document.getElementById('cartDeliveryFee');
+      if (deliveryFeeElement) {
+        deliveryFeeElement.textContent = hasSubscription ? 'Free Delivery' : `Delivery Fee: PKR ${deliveryFee.toFixed(2)}`;
+      }
+
+      // Add event listeners for quantity and remove buttons
+      document.querySelectorAll('.quantity-btn').forEach(button => {
+        button.addEventListener('click', function() {
+          const itemId = parseInt(this.dataset.id);
+          const action = this.dataset.action;
+          const item = cart.find(i => i.id === itemId);
+          if (action === 'increase') {
+            item.quantity += 1;
+          } else if (action === 'decrease' && item.quantity > 1) {
+            item.quantity -= 1;
+          } else if (action === 'decrease') {
+            removeFromCart(itemId);
+          }
+          updateSessionCart();
+          updateCart();
+        });
+      });
+
       document.querySelectorAll('.cart-item-remove').forEach(button => {
         button.addEventListener('click', function() {
           const itemId = parseInt(this.dataset.id);
           removeFromCart(itemId);
         });
       });
+    }
+
+    function updateSessionCart() {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', 'update_cart.php', true);
+      xhr.setRequestHeader('Content-Type', 'application/json');
+      xhr.send(JSON.stringify(cart));
     }
 
     function openCart() {
@@ -916,10 +1200,50 @@ include 'config/db.php'
     checkoutBtn.addEventListener('click', function() {
       if (cart.length === 0) {
         alert('Your cart is empty!');
-      } else {
-        alert('Proceeding to checkout! This would navigate to the checkout page.');
-        // In a real app, navigate to checkout page
+        return;
       }
+      const address = deliveryAddress.value.trim();
+      if (!address) {
+        alert('Please enter your delivery address!');
+        deliveryAddress.focus();
+        return;
+      }
+      if (!isLoggedIn) {
+        window.location.href = 'login.php?redirect=menu.php';
+        return;
+      }
+
+      const form = document.createElement('form');
+      form.method = 'POST';
+      form.action = '';
+
+      const cartInput = document.createElement('input');
+      cartInput.type = 'hidden';
+      cartInput.name = 'cart_data';
+      cartInput.value = JSON.stringify(cart);
+      form.appendChild(cartInput);
+
+      const subtotal = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
+      const subtotalInput = document.createElement('input');
+      subtotalInput.type = 'hidden';
+      subtotalInput.name = 'subtotal';
+      subtotalInput.value = subtotal;
+      form.appendChild(subtotalInput);
+
+      const addressInput = document.createElement('input');
+      addressInput.type = 'hidden';
+      addressInput.name = 'delivery_address';
+      addressInput.value = address;
+      form.appendChild(addressInput);
+
+      const checkoutInput = document.createElement('input');
+      checkoutInput.type = 'hidden';
+      checkoutInput.name = 'checkout';
+      checkoutInput.value = '1';
+      form.appendChild(checkoutInput);
+
+      document.body.appendChild(form);
+      form.submit();
     });
 
     // Debounce function
@@ -935,6 +1259,40 @@ include 'config/db.php'
       };
     }
 
+    // Initialize page
+    document.addEventListener('DOMContentLoaded', function() {
+      setTimeout(() => {
+        document.querySelectorAll('.fade-in').forEach(el => {
+          el.classList.add('visible');
+        });
+      }, 100);
+
+      updateCart();
+
+      document.querySelectorAll('.filter-btn').forEach(button => {
+        button.addEventListener('click', function() {
+          document.querySelectorAll('.filter-btn').forEach(btn => btn.classList.remove('active'));
+          this.classList.add('active');
+          currentCategory = this.dataset.category;
+          applyFilters();
+        });
+      });
+
+      document.querySelectorAll('.add-to-cart-btn').forEach(button => {
+        button.addEventListener('click', function() {
+          const item = {
+            id: parseInt(this.dataset.id),
+            name: this.dataset.name,
+            price: parseFloat(this.dataset.price),
+            image: this.dataset.image,
+            category: this.dataset.category,
+            quantity: 1
+          };
+          addToCart(item);
+        });
+      });
+    });
+
     // Accessibility: Handle keyboard navigation for filter buttons
     document.querySelectorAll('.filter-btn').forEach(button => {
       button.addEventListener('keydown', function(event) {
@@ -944,16 +1302,7 @@ include 'config/db.php'
         }
       });
     });
-
-    // Handle initial page load animation
-    window.addEventListener('load', function() {
-      document.querySelectorAll('.menu-card').forEach((card, index) => {
-        setTimeout(() => {
-          card.classList.add('visible');
-        }, index * 100);
-      });
-    });
   </script>
 </body>
 
-</html>
+</html> 

@@ -1,40 +1,40 @@
 <?php
-// Start the vendor session
+// Start the vendor session securely
 session_name('vendor_session');
 session_start();
 
 // Database connection
-$servername = "localhost";
-$username = "root";
-$password = "";
-$dbname = "foodiehub";
+$host = "localhost";
+$db = "foodiehub";
+$user = "root";
+$pass = "";
 
 try {
-  $conn = new PDO("mysql:host=$servername;dbname=$dbname", $username, $password);
+  $conn = new PDO("mysql:host=$host;dbname=$db", $user, $pass);
   $conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 } catch (PDOException $e) {
   die("Connection failed: " . $e->getMessage());
 }
 
-// Handle registration
 $error_message = '';
 $success_message = '';
+
 if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['register'])) {
   // Sanitize inputs
-  $restaurant_name = trim(htmlspecialchars($_POST['restaurantName'], ENT_QUOTES, 'UTF-8'));
-  $email = filter_var($_POST['email'], FILTER_SANITIZE_EMAIL);
-  $password = $_POST['password'];
-  $confirm_password = $_POST['confirmPassword'];
-  $category = trim(htmlspecialchars($_POST['category'], ENT_QUOTES, 'UTF-8'));
-  $contact_number = trim(htmlspecialchars($_POST['contactNumber'], ENT_QUOTES, 'UTF-8'));
+  $restaurant_name = htmlspecialchars(trim($_POST['restaurantName'] ?? ''));
+  $email = filter_var(trim($_POST['email'] ?? ''), FILTER_SANITIZE_EMAIL);
+  $password = $_POST['password'] ?? '';
+  $confirm_password = $_POST['confirmPassword'] ?? '';
+  $category = htmlspecialchars(trim($_POST['category'] ?? ''));
+  $contact_number = htmlspecialchars(trim($_POST['contactNumber'] ?? ''));
 
-  // Server-side validation
-  if (empty($restaurant_name) || empty($email) || empty($password) || empty($confirm_password) || empty($category) || empty($contact_number)) {
+  // Validation
+  if (!$restaurant_name || !$email || !$password || !$confirm_password || !$category || !$contact_number) {
     $error_message = "Please fill in all fields.";
   } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-    $error_message = "Please enter a valid email.";
+    $error_message = "Please enter a valid email address.";
   } elseif (strlen($password) < 6) {
-    $error_message = "Password must be at least 6 characters.";
+    $error_message = "Password must be at least 6 characters long.";
   } elseif ($password !== $confirm_password) {
     $error_message = "Passwords do not match.";
   } elseif (!preg_match("/^\+?\d{10,15}$/", $contact_number)) {
@@ -45,12 +45,19 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['register'])) {
       $stmt = $conn->prepare("SELECT id FROM vendors WHERE email = :email");
       $stmt->bindParam(':email', $email);
       $stmt->execute();
+
       if ($stmt->fetch()) {
         $error_message = "Email is already registered.";
       } else {
+        // Begin transaction for atomic operations
+        $conn->beginTransaction();
+
         // Insert new vendor
         $hashed_password = password_hash($password, PASSWORD_DEFAULT);
-        $stmt = $conn->prepare("INSERT INTO vendors (restaurant_name, email, password, category, contact_number) VALUES (:restaurant_name, :email, :password, :category, :contact_number)");
+        $stmt = $conn->prepare("
+                    INSERT INTO vendors (restaurant_name, email, password, category, contact_number) 
+                    VALUES (:restaurant_name, :email, :password, :category, :contact_number)
+                ");
         $stmt->bindParam(':restaurant_name', $restaurant_name);
         $stmt->bindParam(':email', $email);
         $stmt->bindParam(':password', $hashed_password);
@@ -58,10 +65,75 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['register'])) {
         $stmt->bindParam(':contact_number', $contact_number);
         $stmt->execute();
 
-        $success_message = "Registration successful! Redirecting to login...";
-        header("refresh:2;url=vendor-login.php");
+        // Get the newly inserted vendor ID
+        $vendor_id = $conn->lastInsertId();
+
+        // Handle image uploads
+        if (!empty($_FILES['restaurantImages']['name'][0])) {
+          $upload_dir = 'Uploads/';
+          // Create Uploads directory if it doesn't exist
+          if (!is_dir($upload_dir)) {
+            mkdir($upload_dir, 0755, true);
+          }
+
+          $allowed_types = ['image/jpeg', 'image/png', 'image/gif'];
+          $max_size = 5 * 1024 * 1024; // 5MB
+          $uploaded_images = [];
+
+          foreach ($_FILES['restaurantImages']['name'] as $key => $name) {
+            if ($_FILES['restaurantImages']['error'][$key] === UPLOAD_ERR_OK) {
+              $tmp_name = $_FILES['restaurantImages']['tmp_name'][$key];
+              $type = $_FILES['restaurantImages']['type'][$key];
+              $size = $_FILES['restaurantImages']['size'][$key];
+
+              // Validate file type and size
+              if (!in_array($type, $allowed_types)) {
+                throw new Exception("Invalid file type for image: $name. Only JPEG, PNG, and GIF are allowed.");
+              }
+              if ($size > $max_size) {
+                throw new Exception("File size for $name exceeds 5MB.");
+              }
+
+              // Generate unique filename
+              $ext = pathinfo($name, PATHINFO_EXTENSION);
+              $filename = 'vendor_' . $vendor_id . '_' . uniqid() . '.' . $ext;
+              $destination = $upload_dir . $filename;
+
+              // Move file to Uploads directory
+              if (move_uploaded_file($tmp_name, $destination)) {
+                $uploaded_images[] = $destination;
+
+                // Insert into vendor_images
+                $stmt = $conn->prepare("
+                                    INSERT INTO vendor_images (vendor_id, image_path, uploaded_at)
+                                    VALUES (:vendor_id, :image_path, NOW())
+                                ");
+                $stmt->bindParam(':vendor_id', $vendor_id, PDO::PARAM_INT);
+                $stmt->bindParam(':image_path', $destination);
+                $stmt->execute();
+              } else {
+                throw new Exception("Failed to upload image: $name.");
+              }
+            }
+          }
+
+          if (empty($uploaded_images)) {
+            $error_message = "No valid images were uploaded.";
+            $conn->rollBack();
+          } else {
+            $conn->commit();
+            $success_message = "🎉 Registration successful! Images uploaded. Redirecting to login...";
+            header("refresh:2;url=vendor_login.php");
+          }
+        } else {
+          // No images uploaded, still commit vendor registration
+          $conn->commit();
+          $success_message = "🎉 Registration successful! No images uploaded. Redirecting to login...";
+          header("refresh:2;url=vendor_login.php");
+        }
       }
-    } catch (PDOException $e) {
+    } catch (Exception $e) {
+      $conn->rollBack();
       $error_message = "Error: " . $e->getMessage();
     }
   }
@@ -234,7 +306,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['register'])) {
     <h2><i class="fas fa-utensils me-2"></i>Vendor Registration</h2>
     <div id="errorMessage" class="error-message"><?php echo htmlspecialchars($error_message); ?></div>
     <div id="successMessage" class="success-message"><?php echo htmlspecialchars($success_message); ?></div>
-    <form method="POST" action="">
+    <form method="POST" action="" enctype="multipart/form-data">
       <div class="mb-3">
         <label for="restaurantName" class="form-label">Restaurant Name</label>
         <input type="text" class="form-control" id="restaurantName" name="restaurantName" placeholder="Enter restaurant name" value="<?php echo isset($_POST['restaurantName']) ? htmlspecialchars($_POST['restaurantName']) : ''; ?>" required>
@@ -250,6 +322,10 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['register'])) {
       <div class="mb-3">
         <label for="confirmPassword" class="form-label">Confirm Password</label>
         <input type="password" class="form-control" id="confirmPassword" name="confirmPassword" placeholder="Confirm your password" required>
+      </div>
+      <div class="mb-3">
+        <label for="restaurantImages" class="form-label">Upload Restaurant Images (4-5)</label>
+        <input type="file" class="form-control" name="restaurantImages[]" id="restaurantImages" multiple accept="image/jpeg,image/png,image/gif" required>
       </div>
       <div class="mb-3">
         <label for="category" class="form-label">Restaurant Category</label>
@@ -270,7 +346,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['register'])) {
       <button type="submit" name="register" class="btn btn-register">Register</button>
     </form>
     <div class="text-center mt-3">
-      <p>Already have an account? <a href="vendor-login.php" class="login-link">Login here</a></p>
+      <p>Already have an account? <a href="vendor_login.php" class="login-link">Login here</a></p>
       <p><a href="index.php" class="home-link">Back to Home</a></p>
     </div>
   </div>

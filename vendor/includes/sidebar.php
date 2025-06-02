@@ -76,6 +76,12 @@
       <a class="nav-link active" href="vendor-menu.php"><i class="fas fa-utensils me-2"></i>Menu</a>
     </li>
     <li class="nav-item">
+      <a class="nav-link active" href="add-plan.php"><i class="fas fa-utensils me-2"></i>Plans</a>
+    </li>
+    <li class="nav-item">
+      <a class="nav-link active" href="vendor-menu.php"><i class="fas fa-utensils me-2"></i>Menu</a>
+    </li>
+    <li class="nav-item">
       <a class="nav-link" href="vendor-details.php"><i class="fas fa-cog me-2"></i>Settings</a>
     </li>
     <li class="nav-item">

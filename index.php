@@ -1,4 +1,4 @@
-<?php 
+<?php
 session_start();
 include 'config/db.php'
 
@@ -936,7 +936,6 @@ include 'config/db.php'
         element.textContent = Math.floor(current) + (target >= 1000 ? 'K+' : '+');
       }, 20);
     }
-
     // Trigger counter animation when about section is visible
     const aboutSection = document.querySelector('#about');
     const aboutObserver = new IntersectionObserver((entries) => {
@@ -953,7 +952,6 @@ include 'config/db.php'
     }, {
       threshold: 0.5
     });
-
     aboutObserver.observe(aboutSection);
   </script>
 </body>

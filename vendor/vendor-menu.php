@@ -636,12 +636,48 @@ try {
             <div class="form-group mb-3">
               <label for="itemCategory">Category</label>
               <select class="form-control" id="itemCategory" name="itemCategory" required>
+                <option value="">-- Select Category --</option>
                 <option value="Pizzas">Pizzas</option>
+                <option value="Burgers">Burgers</option>
                 <option value="Sides">Sides</option>
                 <option value="Drinks">Drinks</option>
                 <option value="Desserts">Desserts</option>
+                <option value="Salads">Salads</option>
+                <option value="Appetizers">Appetizers</option>
+                <option value="Soups">Soups</option>
+                <option value="Sandwiches">Sandwiches</option>
+                <option value="Breakfast">Breakfast</option>
+                <option value="Seafood">Seafood</option>
+                <option value="Vegetarian">Vegetarian</option>
+                <option value="Vegan">Vegan</option>
+                <option value="Kids Menu">Kids Menu</option>
+                <option value="Specials">Specials</option>
+                <option value="Alcoholic Beverages">Alcoholic Beverages</option>
+                <option value="Coffee & Tea">Coffee & Tea</option>
+                <option value="Smoothies">Smoothies</option>
               </select>
             </div>
+
+
+            <!-- Hidden by default: shows only if "Add Custom Category" is selected -->
+            <div class="form-group mb-3" id="customCategoryWrapper" style="display: none;">
+              <label for="customCategory">Custom Category</label>
+              <input type="text" class="form-control" id="customCategory" name="customCategory" placeholder="Enter custom category">
+            </div>
+            <script>
+              function toggleCustomCategory(select) {
+                const customWrapper = document.getElementById('customCategoryWrapper');
+                if (select.value === 'custom') {
+                  customWrapper.style.display = 'block';
+                  document.getElementById('customCategory').required = true;
+                } else {
+                  customWrapper.style.display = 'none';
+                  document.getElementById('customCategory').required = false;
+                }
+              }
+            </script>
+
+
             <div class="form-group mb-3">
               <label for="itemDescription">Description</label>
               <textarea class="form-control" id="itemDescription" name="itemDescription" placeholder="Enter description"></textarea>
