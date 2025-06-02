@@ -214,7 +214,7 @@
 <!-- Sidebar -->
 <div id="sidebar">
   <button class="close-sidebar" id="closeSidebar"><i class="fas fa-times"></i></button>
-  <div class="logo">FoodieHub</div>
+  <div class="logo">TasteConnect</div>
   <a href="index.php" class="menu-item active"><i class="fas fa-tachometer-alt"></i><span>Dashboard</span></a>
   <a href="orders.php" class="menu-item"><i class="fas fa-shopping-cart"></i><span>Orders</span></a>
   <a href="vendors.php" class="menu-item"><i class="fas fa-store"></i><span>Restaurants</span></a>

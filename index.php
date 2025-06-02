@@ -1,4 +1,4 @@
-<?php
+<?php 
 session_start();
 include 'config/db.php'
 
@@ -9,7 +9,8 @@ include 'config/db.php'
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>FoodieHub - Order Your Favorite Food Online</title>
+  <link rel="shortcut icon" href="../assets/img/logostaste.png" type="image/x-png">
+  <title>TasteConnect - Order Your Favorite Food Online</title>
   <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/css/bootstrap.min.css" rel="stylesheet">
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
   <style>
@@ -936,6 +937,7 @@ include 'config/db.php'
         element.textContent = Math.floor(current) + (target >= 1000 ? 'K+' : '+');
       }, 20);
     }
+
     // Trigger counter animation when about section is visible
     const aboutSection = document.querySelector('#about');
     const aboutObserver = new IntersectionObserver((entries) => {
@@ -952,6 +954,7 @@ include 'config/db.php'
     }, {
       threshold: 0.5
     });
+
     aboutObserver.observe(aboutSection);
   </script>
 </body>

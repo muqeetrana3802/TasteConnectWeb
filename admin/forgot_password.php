@@ -95,7 +95,8 @@ if ($step == 2 && empty($security_question) && !empty($username)) {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>FoodHub - Forgot Password</title>
+  <link rel="shortcut icon" href="../assets/img/logostaste.png" type="image/x-png">
+  <title>TasteConnect - Forgot Password</title>
   <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/css/bootstrap.min.css" rel="stylesheet">
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
   <link href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css" rel="stylesheet">

@@ -91,7 +91,8 @@ try {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>FoodHub - Create Account</title>
+  <link rel="shortcut icon" href="../assets/img/logostaste.png" type="image/x-png">
+  <title>TasteConnect - Create Account</title>
   <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/css/bootstrap.min.css" rel="stylesheet">
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
   <style>
@@ -473,7 +474,7 @@ try {
               <div class="brand-logo">
                 <i class="fas fa-utensils"></i>
               </div>
-              <h1 class="brand-name">FoodHub</h1>
+              <h1 class="brand-name">TasteConnect</h1>
               <p class="brand-tagline">Join thousands of food lovers</p>
 
               <ul class="features-list list-unstyled">

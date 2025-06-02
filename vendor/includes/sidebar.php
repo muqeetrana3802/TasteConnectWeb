@@ -30,7 +30,7 @@
 <nav class="navbar navbar-expand-lg navbar-light fixed-top">
   <div class="container">
     <a class="navbar-brand" href="index.php">
-      <i class="fas fa-utensils me-2"></i>FoodieHub
+      <i class="fas fa-utensils me-2"></i>TasteConnect
     </a>
     <span class="navbar-text me-3">
       <!-- <i class="fas fa-user me-1"></i><?php echo $vendor_name; ?> -->
